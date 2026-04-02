@@ -1,0 +1,24 @@
+version: v1-defaults
+
+universe:
+  market: US
+  allowed_security_types:
+    - common_stock
+  allowed_exchanges:
+    - NYSE
+    - NASDAQ
+    - AMEX
+  exclude_security_types:
+    - etf
+    - warrant
+    - rights
+    - preferred
+    - otc
+  minimum_price: 10.0
+  minimum_avg_daily_volume: 1000000
+  minimum_avg_daily_dollar_volume: 20000000.0
+  require_primary_listing: true
+
+notes:
+  purpose: "Liquid US stock universe defaults for V1."
+  warning: "Universe filters are placeholders and should be validated against real symbol metadata."

@@ -1,0 +1,14 @@
+[
+  {"timestamp_utc": "2026-01-01T00:00:00Z", "open": 100.0, "high": 101.0, "low": 99.4, "close": 100.0, "volume": 1000000},
+  {"timestamp_utc": "2026-01-02T00:00:00Z", "open": 100.1, "high": 100.8, "low": 99.5, "close": 99.9, "volume": 1000000},
+  {"timestamp_utc": "2026-01-03T00:00:00Z", "open": 99.9, "high": 100.7, "low": 99.4, "close": 100.0, "volume": 1000000},
+  {"timestamp_utc": "2026-01-04T00:00:00Z", "open": 100.0, "high": 100.9, "low": 99.6, "close": 100.1, "volume": 1000000},
+  {"timestamp_utc": "2026-01-05T00:00:00Z", "open": 100.0, "high": 100.8, "low": 99.5, "close": 100.0, "volume": 1000000},
+  {"timestamp_utc": "2026-01-06T00:00:00Z", "open": 100.0, "high": 100.9, "low": 99.6, "close": 100.0, "volume": 1000000},
+  {"timestamp_utc": "2026-01-07T00:00:00Z", "open": 99.9, "high": 100.8, "low": 99.4, "close": 99.9, "volume": 1000000},
+  {"timestamp_utc": "2026-01-08T00:00:00Z", "open": 100.0, "high": 100.7, "low": 99.5, "close": 100.0, "volume": 1000000},
+  {"timestamp_utc": "2026-01-09T00:00:00Z", "open": 100.1, "high": 100.9, "low": 99.6, "close": 100.1, "volume": 1000000},
+  {"timestamp_utc": "2026-01-10T00:00:00Z", "open": 100.0, "high": 100.8, "low": 99.5, "close": 100.0, "volume": 1000000},
+  {"timestamp_utc": "2026-01-11T00:00:00Z", "open": 100.0, "high": 100.7, "low": 99.4, "close": 99.9, "volume": 1000000},
+  {"timestamp_utc": "2026-01-12T00:00:00Z", "open": 100.0, "high": 100.8, "low": 99.5, "close": 100.0, "volume": 1000000}
+]

@@ -1,0 +1,63 @@
+//@version=6
+indicator("stocknogs Breakout Webhook Template", overlay=true)
+
+// Placeholder inputs for a practical first TradingView sender.
+compressionLookback = input.int(10, "Compression Lookback", minval=2)
+breakoutExpansionThreshold = input.float(1.5, "Breakout Expansion Threshold", minval=0.1, step=0.1)
+relativeVolumeThreshold = input.float(1.2, "Relative Volume Threshold", minval=0.1, step=0.1)
+overheadClearanceThreshold = input.float(2.0, "Overhead Clearance Threshold", minval=0.0, step=0.1)
+
+// Narrow, inspectable placeholder logic. Replace these expressions over time with the real TradingView-side setup logic.
+compressionHigh = ta.highest(high, compressionLookback)
+compressionLow = ta.lowest(low, compressionLookback)
+triggerLevel = compressionHigh
+baseRange = math.max(compressionHigh - compressionLow, syminfo.mintick)
+breakoutRangeVsBaseAvg = (high - low) / (baseRange / compressionLookback)
+relativeVolume = volume / math.max(ta.sma(volume, compressionLookback), 1.0)
+rejectionWickPct = ((high - math.max(open, close)) / math.max(high - low, syminfo.mintick)) * 100.0
+overheadClearancePct = na
+
+trendPass = close > ta.sma(close, 20)
+compressionPass = close >= ((compressionHigh + compressionLow) / 2.0)
+breakoutPass = close > triggerLevel and breakoutRangeVsBaseAvg >= breakoutExpansionThreshold
+trapRiskElevated = rejectionWickPct > 25.0 or relativeVolume < relativeVolumeThreshold
+
+shouldAlert = trendPass and compressionPass and breakoutPass
+
+timestampIso =
+    str.format(
+         "{0,number,0000}-{1,number,00}-{2,number,00}T{3,number,00}:{4,number,00}:{5,number,00}Z",
+         year(time),
+         month(time),
+         dayofmonth(time),
+         hour(time),
+         minute(time),
+         second(time)
+     )
+
+payload =
+    "{"
+    + "\"symbol\":\"" + syminfo.ticker + "\","
+    + "\"exchange\":\"" + syminfo.prefix + "\","
+    + "\"timeframe\":\"" + timeframe.period + "\","
+    + "\"timestamp\":\"" + timestampIso + "\","
+    + "\"close\":" + str.tostring(close) + ","
+    + "\"trend_pass\":" + str.tostring(trendPass) + ","
+    + "\"compression_pass\":" + str.tostring(compressionPass) + ","
+    + "\"breakout_pass\":" + str.tostring(breakoutPass) + ","
+    + "\"trap_risk_elevated\":" + str.tostring(trapRiskElevated) + ","
+    + "\"compression_high\":" + str.tostring(compressionHigh) + ","
+    + "\"compression_low\":" + str.tostring(compressionLow) + ","
+    + "\"trigger_level\":" + str.tostring(triggerLevel) + ","
+    + "\"breakout_price\":" + str.tostring(close) + ","
+    + "\"breakout_range_vs_base_avg\":" + str.tostring(breakoutRangeVsBaseAvg) + ","
+    + "\"relative_volume\":" + str.tostring(relativeVolume) + ","
+    + "\"rejection_wick_pct\":" + str.tostring(rejectionWickPct)
+    + "}"
+
+if shouldAlert
+    alert(payload, alert.freq_once_per_bar_close)
+
+plot(compressionHigh, "Compression High", color=color.new(color.green, 0))
+plot(compressionLow, "Compression Low", color=color.new(color.red, 0))
+plot(triggerLevel, "Trigger Level", color=color.new(color.orange, 0))

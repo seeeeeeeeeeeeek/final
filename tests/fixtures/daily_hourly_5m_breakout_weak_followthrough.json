@@ -1,0 +1,24 @@
+{
+  "daily": [
+    {"timestamp_utc": "2026-01-01T00:00:00Z", "open": 95, "high": 98, "low": 94, "close": 97, "volume": 1000000},
+    {"timestamp_utc": "2026-01-02T00:00:00Z", "open": 97, "high": 100, "low": 96, "close": 99, "volume": 1100000},
+    {"timestamp_utc": "2026-01-03T00:00:00Z", "open": 99, "high": 103, "low": 98, "close": 102, "volume": 1200000}
+  ],
+  "hourly": [
+    {"timestamp_utc": "2026-01-03T14:00:00Z", "high": 101.0, "low": 99.0, "close": 100.0, "volume": 160000},
+    {"timestamp_utc": "2026-01-03T15:00:00Z", "high": 104.0, "low": 101.0, "close": 103.0, "volume": 170000},
+    {"timestamp_utc": "2026-01-03T16:00:00Z", "high": 107.0, "low": 103.0, "close": 106.0, "volume": 180000},
+    {"timestamp_utc": "2026-01-03T17:00:00Z", "high": 110.0, "low": 106.0, "close": 109.0, "volume": 190000},
+    {"timestamp_utc": "2026-01-03T18:00:00Z", "high": 111.0, "low": 108.0, "close": 110.0, "volume": 150000},
+    {"timestamp_utc": "2026-01-03T19:00:00Z", "high": 111.0, "low": 109.0, "close": 110.0, "volume": 140000},
+    {"timestamp_utc": "2026-01-03T20:00:00Z", "high": 110.8, "low": 109.2, "close": 110.2, "volume": 130000},
+    {"timestamp_utc": "2026-01-03T21:00:00Z", "high": 110.7, "low": 109.5, "close": 110.3, "volume": 120000},
+    {"timestamp_utc": "2026-01-03T22:00:00Z", "high": 110.6, "low": 109.8, "close": 110.4, "volume": 110000},
+    {"timestamp_utc": "2026-01-03T23:00:00Z", "high": 110.5, "low": 110.0, "close": 110.45, "volume": 100000}
+  ],
+  "intraday_5m": [
+    {"timestamp_utc": "2026-01-04T14:30:00Z", "high": 111.9, "low": 110.2, "close": 111.8, "volume": 210000},
+    {"timestamp_utc": "2026-01-04T14:35:00Z", "high": 111.0, "low": 109.9, "close": 110.1, "volume": 180000},
+    {"timestamp_utc": "2026-01-04T14:40:00Z", "high": 110.8, "low": 109.8, "close": 110.0, "volume": 170000}
+  ]
+}

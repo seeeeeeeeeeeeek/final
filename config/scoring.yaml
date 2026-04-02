@@ -1,0 +1,30 @@
+version: v1-defaults
+
+scoring:
+  total_score_max: 100.0
+  weights:
+    trend_alignment: 20.0
+    squeeze_quality: 25.0
+    breakout_impulse: 25.0
+    path_quality: 20.0
+    trap_risk_penalty: 10.0
+  normalization:
+    clamp_min: 0.0
+    clamp_max: 100.0
+
+rank_bands:
+  elite: 85.0
+  strong: 70.0
+  watchlist: 55.0
+  reject_below: 55.0
+
+component_defaults:
+  trend_alignment: 0.0
+  squeeze_quality: 0.0
+  breakout_impulse: 0.0
+  path_quality: 0.0
+  trap_risk_penalty: 0.0
+
+notes:
+  purpose: "Explainable scoring weights for V1."
+  warning: "Weights are placeholders and should remain configurable."

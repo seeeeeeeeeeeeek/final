@@ -1,0 +1,62 @@
+version: v1-defaults
+
+scanner:
+  market: US
+  direction: long
+  timeframes:
+    trend: 1D
+    setup: 1H
+    trigger: 5m
+  log_level: INFO
+  include_module_metrics: true
+  persist_debug_payloads: false
+
+trend_filter:
+  enabled: true
+  moving_average_periods:
+    fast: 20
+    slow: 50
+  minimum_slope_pct: 0.0
+  minimum_trend_strength_score: 60.0
+  require_price_above_fast_ma: true
+  require_price_above_slow_ma: true
+  require_higher_high_higher_low_structure: true
+
+compression:
+  enabled: true
+  minimum_base_bars: 5
+  maximum_base_bars: 20
+  maximum_pullback_depth_pct: 35.0
+  minimum_range_contraction_pct: 20.0
+  minimum_volatility_contraction_pct: 15.0
+  require_upper_half_positioning: true
+  enable_volume_dry_up_bonus: true
+
+breakout_trigger:
+  enabled: true
+  breakout_buffer_pct: 0.1
+  minimum_breakout_range_vs_base_avg: 1.5
+  confirmation_bar_count: 2
+  use_volume_confirmation: true
+  minimum_relative_volume: 1.2
+
+trap_risk:
+  enabled: true
+  maximum_distance_from_trend_ref_pct: 8.0
+  maximum_rejection_wick_pct: 25.0
+  minimum_overhead_clearance_pct: 2.0
+  maximum_failed_follow_through_bars: 2
+  abnormal_gap_threshold_pct: 5.0
+
+explanations:
+  enabled: true
+  max_reasons: 3
+  include_metrics_summary: true
+
+skip_reasons:
+  enabled: true
+  require_primary_reason: true
+
+notes:
+  purpose: "Documented default thresholds for V1 scaffold only."
+  warning: "These defaults are placeholders and must be validated before production use."

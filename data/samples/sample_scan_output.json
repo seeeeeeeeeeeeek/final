@@ -1,0 +1,208 @@
+{
+  "debug": {
+    "config_version": "v1-defaults",
+    "data_quality_warnings": []
+  },
+  "diagnostics": {
+    "ocr": {
+      "allowlist_used": null,
+      "capture_region": null,
+      "extraction_errors": [],
+      "fallback_activated": false,
+      "ocr_confidence": null,
+      "parsing_confidence": null
+    },
+    "source": {
+      "fallback_chain": [],
+      "freshness_seconds": 7552027.2,
+      "latency_ms": 0.3,
+      "missing_fields": [],
+      "provider_warnings": [],
+      "source_selected": "fixture",
+      "source_type": "structured_live",
+      "symbol_detected": "NVDA",
+      "timeframe_coverage": {
+        "1D": true,
+        "1H": true,
+        "1m": false,
+        "5m": true
+      },
+      "warnings": []
+    },
+    "strategy": {
+      "confidence_factors": [],
+      "preset_evaluated": "No preset matched yet",
+      "rules_failed": [
+        "daily_trend_pass"
+      ],
+      "rules_passed": [
+        "compression_pass",
+        "trigger_pass"
+      ],
+      "runner_up_preset": null
+    },
+    "system": {
+      "errors": [],
+      "last_successful_refresh": "2026-04-02T00:37:07.197694+00:00",
+      "last_successful_webhook": null,
+      "processing_time_ms": 0.3,
+      "provider_warnings": []
+    }
+  },
+  "direction": "long",
+  "explanations": {
+    "no_trade_reason": null,
+    "reasons": [
+      "Insufficient daily bars for trend filter; need at least 51.",
+      "Constructive hourly compression detected after a prior impulse.",
+      "Breakout cleared the compression high with required expansion and acceptable 5m follow-through."
+    ],
+    "skip_reason": "Skipped because the daily trend filter failed: Insufficient daily bars for trend filter; need at least 51.",
+    "summary": "Skipped because the daily trend filter failed: Insufficient daily bars for trend filter; need at least 51. Total score: 53.11."
+  },
+  "flags": {
+    "compression_pass": true,
+    "daily_trend_pass": false,
+    "trap_risk_elevated": false,
+    "trigger_pass": true,
+    "volume_confirmation_used": true
+  },
+  "levels": {
+    "breakout_price": 112.0,
+    "compression_high": 111.0,
+    "compression_low": 108.0,
+    "nearest_overhead_resistance": null,
+    "trigger_level": 111.111
+  },
+  "market": "US",
+  "metrics": {
+    "abnormal_gap_pct": 0.3623,
+    "base_position_pct": 80.0,
+    "breakout_price": 112.0,
+    "breakout_range_vs_base_avg": 1.6456,
+    "breakout_timestamp_utc": "2026-01-04T14:30:00Z",
+    "compression_depth_pct": 18.18,
+    "compression_end": "2026-01-03T23:00:00Z",
+    "compression_high": 111.0,
+    "compression_length_bars": 5,
+    "compression_low": 108.0,
+    "compression_start": "2026-01-03T19:00:00Z",
+    "confirmation_bar_count_used": 2,
+    "daily_bar_count": 3,
+    "distance_from_trend_ref_pct": 2.2831,
+    "follow_through_pass": true,
+    "hourly_bar_count": 10,
+    "overhead_clearance_pct": 3.125,
+    "prior_impulse_pct": 16.67,
+    "range_contraction_pct": 61.33,
+    "rejection_wick_pct": 11.5385,
+    "relative_volume": 1.6923,
+    "trap_risk_penalty": 0,
+    "trend_strength_score": 0.0,
+    "trigger_level": 111.111,
+    "volatility_contraction_pct": 82.86,
+    "volume_dry_up_bonus_applied": true,
+    "weak_followthrough_detected": false
+  },
+  "scan_id": "2026-04-02T00:37:07.197686+00:00",
+  "scores": {
+    "breakout_impulse": 17.47,
+    "path_quality": 15.27,
+    "squeeze_quality": 20.38,
+    "total": 53.11,
+    "trap_risk_penalty": -0.0,
+    "trend_alignment": 0.0
+  },
+  "setup_window": {
+    "compression_end": "2026-01-03T23:00:00Z",
+    "compression_start": "2026-01-03T19:00:00Z",
+    "trigger_time": "2026-01-04T14:30:00Z"
+  },
+  "snapshot": {
+    "daily": {
+      "bar_count": 3,
+      "indicators": {},
+      "latest_bar": {
+        "close": 108,
+        "high": 109,
+        "low": 104,
+        "open": 105,
+        "timestamp_utc": "2026-01-03T00:00:00Z",
+        "volume": 1200000
+      },
+      "timeframe": "1D",
+      "visible_overlays": []
+    },
+    "fallback_chain": [],
+    "freshness_seconds": 7552027.2,
+    "hourly": {
+      "bar_count": 10,
+      "indicators": {},
+      "latest_bar": {
+        "close": 110.4,
+        "high": 110.6,
+        "low": 110.0,
+        "timestamp_utc": "2026-01-03T23:00:00Z",
+        "volume": 110000
+      },
+      "timeframe": "1H",
+      "visible_overlays": []
+    },
+    "intraday_1m": {
+      "bar_count": 0,
+      "indicators": {},
+      "latest_bar": null,
+      "timeframe": "1m",
+      "visible_overlays": []
+    },
+    "intraday_5m": {
+      "bar_count": 5,
+      "indicators": {},
+      "latest_bar": {
+        "close": 112.2,
+        "high": 112.6,
+        "low": 111.5,
+        "open": 111.9,
+        "timestamp_utc": "2026-01-04T14:50:00Z",
+        "volume": 165000
+      },
+      "timeframe": "5m",
+      "visible_overlays": []
+    },
+    "latency_ms": 0.3,
+    "missing_fields": [],
+    "source_confidence": 0.95,
+    "source_type": "structured_live",
+    "source_used": "fixture",
+    "symbol": "NVDA",
+    "timestamp_utc": "2026-01-04T14:50:00Z",
+    "warnings": []
+  },
+  "status": "skipped",
+  "symbol": "NVDA",
+  "thesis": {
+    "confidence_score": 53.11,
+    "explanation_reasons": [
+      "Insufficient daily bars for trend filter; need at least 51.",
+      "Constructive hourly compression detected after a prior impulse.",
+      "Breakout cleared the compression high with required expansion and acceptable 5m follow-through."
+    ],
+    "explanation_summary": "Skipped because the daily trend filter failed: Insufficient daily bars for trend filter; need at least 51. Total score: 53.11.",
+    "intraday_bias": "Constructive",
+    "intraday_target": "Not available yet",
+    "invalidation": "108.00",
+    "runner_up_strategy": null,
+    "short_term_bias": "Triggered",
+    "short_term_target": "111.00",
+    "source_used": "fixture",
+    "strategy_match": null,
+    "swing_bias": "Bullish",
+    "swing_target": "Not available yet"
+  },
+  "timeframes": {
+    "setup": "1H",
+    "trend": "1D",
+    "trigger": "5m"
+  },
+  "timestamp_utc": "2026-04-02T00:37:07.197694+00:00"
+}

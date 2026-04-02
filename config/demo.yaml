@@ -1,0 +1,7 @@
+defaults:
+  trend_filter:
+    moving_average_periods:
+      fast: 1
+      slow: 2
+    require_price_above_fast_ma: false
+    require_higher_high_higher_low_structure: false
