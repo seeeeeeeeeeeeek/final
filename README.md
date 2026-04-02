@@ -41,6 +41,30 @@ Notes:
 - The key is not stored in repo config files.
 - The code does not intentionally log the key.
 
+## Install Or Update On Another Windows PC
+If you want someone else to install or update the latest repo with one script, use:
+
+- [install_or_update_stocknogs.bat](c:/Users/Apple/Desktop/stocknogs/install_or_update_stocknogs.bat)
+- [install_or_update_stocknogs.ps1](c:/Users/Apple/Desktop/stocknogs/install_or_update_stocknogs.ps1)
+
+Recommended simple path:
+1. Download `install_or_update_stocknogs.bat`.
+2. Run it on the target Windows machine.
+3. It will download the latest PowerShell updater from this GitHub repo and then:
+   - clone `main` into `Desktop\\stocknogs` if the folder does not exist
+   - force-sync an existing `stocknogs` git repo to the latest `origin/main`
+   - move a non-git `stocknogs` folder aside into a timestamped backup, then clone fresh
+
+Optional custom target folder:
+
+```powershell
+install_or_update_stocknogs.bat "C:\Users\YourName\Desktop\stocknogs"
+```
+
+Notes:
+- Git or GitHub Desktop must already be installed.
+- The updater is intentionally destructive for existing git checkouts: it resets to the latest remote `main` and removes untracked files inside that repo folder.
+
 ## Run The GUI
 Start the local tester GUI:
 
