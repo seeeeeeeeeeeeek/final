@@ -1,5 +1,6 @@
 import json
 import threading
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -23,12 +24,12 @@ def _request_json(url: str, *, method: str = "GET", body: dict | None = None) ->
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
-def _valid_payload(symbol: str = "NVDA") -> dict:
+def _valid_payload(symbol: str = "NVDA", *, timestamp: str | None = None) -> dict:
     return {
         "symbol": symbol,
         "exchange": "NASDAQ",
         "timeframe": "5m",
-        "timestamp": "2026-04-01T13:35:00Z",
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "close": 944.2,
         "trend_pass": True,
         "compression_pass": True,
@@ -90,6 +91,19 @@ def test_gui_api_health_endpoint_reports_running_state(tmp_path) -> None:
         server.server_close()
 
 
+def test_gui_api_public_index_hides_replay_lab_navigation(tmp_path) -> None:
+    server = _start_server(tmp_path)
+    try:
+        request = Request(f"http://127.0.0.1:{server.server_port}/", method="GET")
+        with urlopen(request, timeout=10) as response:
+            html = response.read().decode("utf-8")
+        assert 'data-page="replay"' not in html
+        assert "Replay Lab" not in html
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_gui_api_replay_inserts_record_into_history_and_detail(tmp_path) -> None:
     server = _start_server(tmp_path)
     try:
@@ -106,6 +120,7 @@ def test_gui_api_replay_inserts_record_into_history_and_detail(tmp_path) -> None
         assert replay["result"]["simple_summary"]["best_action"] == "Consider Long"
         assert replay["result"]["simple_summary"]["why_it_matters"]
         assert replay["result"]["simple_summary"]["trust_signals"]
+        assert replay["result"]["simple_summary"]["source_class_label"] == "Replay/demo"
         assert "raw_result" in replay["result"]
 
         _, history = _request_json(f"http://127.0.0.1:{server.server_port}/api/records")
@@ -116,6 +131,7 @@ def test_gui_api_replay_inserts_record_into_history_and_detail(tmp_path) -> None
         assert history["records"][0]["best_action"] == "Consider Long"
         assert history["records"][0]["trust_signals"]
         assert history["records"][0]["why_it_matters"]
+        assert history["records"][0]["source_class_label"] == "Replay/demo"
 
         _, detail = _request_json(f"http://127.0.0.1:{server.server_port}/api/records/{scan_id}")
         assert detail["display"]["setup_status"] == "Ready / Valid setup"
@@ -128,6 +144,7 @@ def test_gui_api_replay_inserts_record_into_history_and_detail(tmp_path) -> None
         assert detail["display"]["invalidation"]
         assert detail["display"]["helper_copy"]["target"]
         assert detail["display"]["trust_signals"]
+        assert detail["display"]["source_class_label"] == "Replay/demo"
         assert detail["display"]["one_sentence_summary"]
         assert detail["display"]["reason_bullets"]
         assert "timeframe_interpretation" in detail["display"]
@@ -159,6 +176,7 @@ def test_gui_api_analyze_auto_flow_exposes_run_state_and_source_path(tmp_path) -
         assert payload["run_state"]["status"] == "success"
         assert payload["run_state"]["source_mode_requested"] == "auto"
         assert payload["run_state"]["source_used"] == "yahoo"
+        assert payload["run_state"]["source_class"] == "live_structured"
         assert payload["run_state"]["fallback_chain"] == ["twelvedata"]
 
         _, run_state = _request_json(f"http://127.0.0.1:{server.server_port}/api/run-state")
@@ -168,8 +186,22 @@ def test_gui_api_analyze_auto_flow_exposes_run_state_and_source_path(tmp_path) -
         _, detail = _request_json(f"http://127.0.0.1:{server.server_port}/api/records/{scan_id}")
         assert detail["display"]["source_path"]["requested"] == "auto"
         assert detail["display"]["source_path"]["used"] == "yahoo"
+        assert detail["display"]["source_path"]["source_class"] == "live_structured"
         assert detail["display"]["source_path"]["fallback_chain"] == ["twelvedata"]
         assert detail["sections"]["detailed_analysis"]["timeframe_summary"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_gui_api_settings_expose_only_public_source_modes_and_ocr_status(tmp_path) -> None:
+    server = _start_server(tmp_path)
+    try:
+        _, settings = _request_json(f"http://127.0.0.1:{server.server_port}/api/settings")
+        assert [mode["value"] for mode in settings["analyze_modes"]] == ["auto", "twelvedata", "webhook", "ocr"]
+        assert settings["ocr_status"]["enabled"] is False
+        assert settings["ocr_status"]["configured"] is False
+        assert settings["ocr_status"]["can_extract_live"] is False
     finally:
         server.shutdown()
         server.server_close()
@@ -213,9 +245,93 @@ def test_gui_api_analyze_returns_readable_failure_for_missing_webhook_source(tmp
             body={"symbol": "AMD", "source_mode": "webhook"},
         )
         assert status == 400
-        assert payload["error"] == "No webhook payload available for requested symbol."
+        assert payload["error"] == "No fresh webhook payload available for requested symbol."
         assert payload["run_state"]["status"] == "failed"
         assert payload["run_state"]["current_step"] == "Failed"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_gui_api_analyze_ocr_returns_honest_unconfigured_failure(tmp_path) -> None:
+    server = _start_server(tmp_path)
+    try:
+        status, payload = _request_json(
+            f"http://127.0.0.1:{server.server_port}/api/analyze",
+            method="POST",
+            body={"symbol": "SPY", "source_mode": "ocr"},
+        )
+        assert status == 400
+        assert payload["error"] == "Screen-read fallback is disabled. Enable OCR in config/ocr_user.yaml to use it."
+        assert payload["ocr_status"]["enabled"] is False
+        assert payload["ocr_result"]["missing_fields"] == ["ticker", "timeframe", "price"]
+        assert payload["run_state"]["status"] == "failed"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_gui_api_analyze_webhook_reuses_only_fresh_webhook_records(tmp_path) -> None:
+    server = _start_server(tmp_path)
+    try:
+        webhook_status, _ = _request_json(
+            f"http://127.0.0.1:{server.server_port}/webhook",
+            method="POST",
+            body=_valid_payload("SPY"),
+        )
+        assert webhook_status == 200
+
+        status, payload = _request_json(
+            f"http://127.0.0.1:{server.server_port}/api/analyze",
+            method="POST",
+            body={"symbol": "SPY", "source_mode": "webhook"},
+        )
+        assert status == 200
+        assert payload["record"]["symbol"] == "SPY"
+        assert payload["record"]["source_class_label"] == "Fresh webhook"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_gui_api_analyze_webhook_rejects_stale_webhook_records(tmp_path) -> None:
+    server = _start_server(tmp_path)
+    try:
+        stale_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat().replace("+00:00", "Z")
+        _request_json(
+            f"http://127.0.0.1:{server.server_port}/webhook",
+            method="POST",
+            body=_valid_payload("SPY", timestamp=stale_timestamp),
+        )
+        status, payload = _request_json(
+            f"http://127.0.0.1:{server.server_port}/api/analyze",
+            method="POST",
+            body={"symbol": "SPY", "source_mode": "webhook"},
+        )
+        assert status == 400
+        assert payload["error"] == "No fresh webhook payload available for requested symbol."
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_gui_api_auto_does_not_reuse_replay_demo_records_as_fallback(tmp_path) -> None:
+    server = _start_server(tmp_path)
+    try:
+        _request_json(
+            f"http://127.0.0.1:{server.server_port}/api/replay",
+            method="POST",
+            body=_valid_payload("SPY"),
+        )
+        with patch.object(TwelveDataMarketDataProvider, "get_symbol_data", return_value=_empty_bundle("Twelve Data unavailable.")):
+            with patch.object(YahooFinanceMarketDataProvider, "get_symbol_data", return_value=_empty_bundle("Yahoo unavailable.")):
+                status, payload = _request_json(
+                    f"http://127.0.0.1:{server.server_port}/api/analyze",
+                    method="POST",
+                    body={"symbol": "SPY", "source_mode": "auto"},
+                )
+        assert status == 400
+        assert payload["error"] == "No supported source could produce usable data."
     finally:
         server.shutdown()
         server.server_close()
@@ -265,6 +381,7 @@ def test_gui_api_loads_history_from_existing_log_on_startup(tmp_path) -> None:
         _, history = _request_json(f"http://127.0.0.1:{server.server_port}/api/records")
         assert history["records"]
         assert history["records"][0]["symbol"] == "AAPL"
+        assert history["records"][0]["source_class_label"] == "Replay/demo"
     finally:
         server.shutdown()
         server.server_close()

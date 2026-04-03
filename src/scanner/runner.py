@@ -49,7 +49,13 @@ class ScanRunner:
     market_data_provider: MarketDataProvider
     signal_logger: SignalLogger
 
-    def run_symbol(self, symbol_context: SymbolContext) -> ScanRecord:
+    def run_symbol(
+        self,
+        symbol_context: SymbolContext,
+        *,
+        requested_source_mode: str | None = None,
+        mode_kind: str = "live",
+    ) -> ScanRecord:
         """Run the V1 pipeline and map module outputs into a stable ScanRecord shape."""
         scan_id = datetime.now(timezone.utc).isoformat()
         record = build_empty_scan_record(
@@ -140,6 +146,12 @@ class ScanRunner:
             record.explanations.no_trade_reason = reason
         record.thesis, record.diagnostics = build_thesis(record)
         record.diagnostics.source = snapshot_result.diagnostics
+        record.diagnostics.source["requested_source_mode"] = requested_source_mode or provider_name
+        record.diagnostics.source["mode_kind"] = mode_kind
+        record.diagnostics.source["source_class"] = "live_structured"
+        record.diagnostics.source["source_class_label"] = "Live data"
+        record.diagnostics.source["is_live"] = True
+        record.diagnostics.source["freshness_state"] = "live"
 
         validate_scan_record(record)
         self.signal_logger.log_signal(record)

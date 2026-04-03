@@ -28,6 +28,7 @@ def _summary_payload(record: ScanRecord, state: "GUIState") -> dict[str, Any]:
     timeframe_summary = state.timeframe_summary(record)
     helper_copy = state.helper_copy()
     reasons = _clean_reasons(record.thesis.explanation_reasons or record.explanations.reasons)
+    source_path = state.source_path(record, {})
     return {
         "symbol": record.symbol,
         "setup_status": state.setup_status_label(record),
@@ -42,6 +43,9 @@ def _summary_payload(record: ScanRecord, state: "GUIState") -> dict[str, Any]:
         "one_sentence_summary": (record.thesis.explanation_summary or record.explanations.summary or "No explanation available yet."),
         "trust_signals": state.trust_signals(record),
         "helper_copy": helper_copy,
+        "source_class_label": source_path["source_class_label"],
+        "freshness_state": source_path["freshness_state"],
+        "freshness_seconds": source_path["freshness_seconds"],
         "timeframe_interpretation": {
             "daily_context": timeframe_summary["daily_context"],
             "hourly_setup": timeframe_summary["hourly_setup"],
@@ -83,9 +87,15 @@ def build_detail_payload(record: ScanRecord, raw_payload: dict[str, Any], state:
             "requested": source_path["requested"],
             "used": source_path["used"],
             "mode_kind": source_path["mode_kind"],
+            "source_class": source_path["source_class_label"],
             "fallback_chain": source_path["fallback_chain"] or ["None"],
             "coverage": source_path["coverage_text"],
             "missing_context": source_path["missing_context_text"],
+            "freshness": (
+                f"{int(source_path['freshness_seconds'])} seconds old"
+                if source_path["freshness_seconds"] is not None
+                else "Not available"
+            ),
         },
     }
     return {
@@ -124,26 +134,26 @@ def build_replay_result_payload(record: ScanRecord, state: "GUIState") -> dict[s
 def sample_payloads() -> dict[str, dict[str, Any]]:
     return {
         "qualified": {
-            "symbol": "NVDA",
+            "symbol": "DEMO",
             "exchange": "NASDAQ",
             "timeframe": "5m",
             "timestamp": "2026-04-01T13:35:00Z",
-            "close": 944.2,
+            "close": 123.4,
             "trend_pass": True,
             "compression_pass": True,
             "breakout_pass": True,
             "trap_risk_elevated": False,
-            "compression_high": 942.1,
-            "compression_low": 910.4,
-            "trigger_level": 942.15,
-            "breakout_price": 944.2,
+            "compression_high": 122.8,
+            "compression_low": 118.6,
+            "trigger_level": 122.85,
+            "breakout_price": 123.4,
             "breakout_range_vs_base_avg": 2.2,
             "relative_volume": 1.8,
             "rejection_wick_pct": 9.0,
             "overhead_clearance_pct": 4.0,
         },
         "no_trade": {
-            "symbol": "AAPL",
+            "symbol": "DEMO2",
             "exchange": "NASDAQ",
             "timeframe": "5m",
             "timestamp": "2026-04-01T13:40:00Z",
@@ -162,7 +172,7 @@ def sample_payloads() -> dict[str, dict[str, Any]]:
             "overhead_clearance_pct": 0.9,
         },
         "skipped": {
-            "symbol": "MSFT",
+            "symbol": "DEMO3",
             "exchange": "NASDAQ",
             "timeframe": "5m",
             "timestamp": "2026-04-01T13:45:00Z",

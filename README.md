@@ -1,11 +1,13 @@
 # stocknogs
 
-A local multi-timeframe chart-analysis companion for liquid US stocks. The app combines structured live market data, TradingView webhook events, replayable payloads, and a local GUI to build a deterministic thesis with bias, confidence, setup status, targets when available, invalidation, and clear diagnostics.
+A local multi-timeframe chart-analysis companion for liquid US stocks. The app combines structured live market data, fresh TradingView webhook events, and a local GUI to build a deterministic thesis with bias, confidence, setup status, targets when available, invalidation, and clear diagnostics.
 
 ## Product Concept
+
 stocknogs is not a broker or order-routing system. It is a Windows-friendly local analysis assistant that reviews Daily, 1H, and 5m context, then explains what is aligned, what is missing, and why a setup qualified, failed, or became too risky.
 
 Primary outputs:
+
 - Higher-timeframe bias
 - Setup status
 - Confidence score
@@ -14,46 +16,13 @@ Primary outputs:
 - Targets and invalidation when they can be derived
 - Source diagnostics and fallback visibility
 
-## Source Priority And Fallback
-Source selection is explicit and diagnostics-first.
+## Quick Start on Another Windows PC
 
-Priority order:
-1. Structured live OHLCV and indicator-ready data
-2. TradingView webhook events
-3. Browser/platform scraping fallback
-4. OCR/screen-capture fallback
-5. Clear diagnostic failure if nothing usable is available
+Use only the Windows updater script:
 
-Current Phase 1 implementation:
-- Twelve Data and Yahoo style structured OHLCV providers remain available
-- TradingView webhook payloads normalize into the same internal snapshot model
-- Source, fallback chain, freshness, latency, and missing-field diagnostics are attached to records
-- Browser and OCR fallback are planned, not implemented yet
-
-## Twelve Data Environment Variable Setup
-Use environment variables only. Never hardcode or commit API keys.
-
-```powershell
-$env:TWELVE_DATA_API_KEY="your_api_key_here"
-```
-
-Notes:
-- The key is not stored in repo config files.
-- The code does not intentionally log the key.
-
-## Install Or Update On Another Windows PC
-If you want someone else to install or update the latest repo with one script, use:
-
-- [install_or_update_stocknogs.bat](c:/Users/Apple/Desktop/stocknogs/install_or_update_stocknogs.bat)
-- [install_or_update_stocknogs.ps1](c:/Users/Apple/Desktop/stocknogs/install_or_update_stocknogs.ps1)
-
-Recommended simple path:
-1. Download `install_or_update_stocknogs.bat`.
+1. Download [`install_or_update_stocknogs.bat`](./install_or_update_stocknogs.bat).
 2. Run it on the target Windows machine.
-3. It will download the latest PowerShell updater from this GitHub repo and then:
-   - clone `main` into `Desktop\\stocknogs` if the folder does not exist
-   - force-sync an existing `stocknogs` git repo to the latest `origin/main`
-   - move a non-git `stocknogs` folder aside into a timestamped backup, then clone fresh
+3. The script will clone or update the latest `main` branch into `Desktop\stocknogs`.
 
 Optional custom target folder:
 
@@ -62,10 +31,45 @@ install_or_update_stocknogs.bat "C:\Users\YourName\Desktop\stocknogs"
 ```
 
 Notes:
-- Git or GitHub Desktop must already be installed.
-- The updater is intentionally destructive for existing git checkouts: it resets to the latest remote `main` and removes untracked files inside that repo folder.
 
-## Run The GUI
+- Git or GitHub Desktop must already be installed.
+- The updater force-syncs an existing `stocknogs` git checkout to the latest remote `main`.
+- If `Desktop\stocknogs` exists but is not the expected repo, the updater moves it aside into a timestamped backup and clones fresh.
+
+## Source Priority and Fallback
+
+Source selection is explicit and diagnostics-first.
+
+Priority order:
+
+1. Structured live OHLCV and indicator-ready data
+2. Fresh TradingView webhook events
+3. OCR/screen-read fallback
+4. Clear diagnostic failure if nothing usable is available
+
+Current Phase 1 implementation:
+
+- Twelve Data and Yahoo style structured OHLCV providers remain available
+- TradingView webhook payloads normalize into the same internal snapshot model
+- Source, fallback chain, freshness, latency, and missing-field diagnostics are attached to records
+- OCR screen-read fallback now has a bounded foundation for visible ticker, timeframe, and price extraction only
+- OCR does not fabricate OHLCV bars or hidden higher-timeframe context
+
+## Twelve Data Environment Variable Setup
+
+Use environment variables only. Never hardcode or commit API keys.
+
+```powershell
+$env:TWELVE_DATA_API_KEY="your_api_key_here"
+```
+
+Notes:
+
+- The key is not stored in repo config files.
+- The code does not intentionally log the key.
+
+## Run the GUI
+
 Start the local tester GUI:
 
 ```powershell
@@ -85,44 +89,66 @@ http://127.0.0.1:8080/webhook
 ```
 
 GUI notes:
+
 - Record history is loaded from the GUI JSONL log on startup.
 - Local setting changes are stored in `config/gui_user.yaml` by default.
-- The GUI remains Python-only and reuses the same webhook, replay, scoring, explanation, snapshot, thesis, and logging backend paths.
-- The interface now prioritizes simple summaries first and advanced technical details second, so non-technical testers can understand the result before opening diagnostics or raw JSON.
-- Analysis Detail and Replay Lab now lead with user-readable action summaries, target/invalidation guidance, confidence explanations, and timeframe story before exposing engine-shaped technical output.
-- The Live Analysis page now includes an `Analyze Ticker` control, source-mode selection, and a run-status panel that shows source path, coverage, fallback chain, and readable failure messages while a run is happening.
+- The GUI remains Python-only and reuses the same webhook, scoring, explanation, snapshot, thesis, and logging backend paths.
+- The interface prioritizes simple summaries first and advanced technical details second.
+- Analysis Detail leads with user-readable action summaries, target/invalidation guidance, confidence explanations, and timeframe story before exposing engine-shaped technical output.
+- The Live Analysis page includes an `Analyze Ticker` control, source-mode selection, and a run-status panel that shows source path, coverage, fallback chain, and readable failure messages while a run is happening.
+- The GUI now separates `Live data`, `Fresh TradingView alert`, and `Stored TradingView alert` results so stale event input is not mistaken for current structured live market analysis.
+- Screen-read fallback is shown as a bounded OCR fallback only. It is honest about what it can and cannot read.
 
 ## GUI Workflow
+
 Visible GUI pages:
+
 1. Home
 2. Live Analysis
 3. Analysis Detail
-4. Replay Lab
-5. Strategy Settings
-6. TradingView Setup
-7. History
-8. Diagnostics
+4. Strategy Settings
+5. TradingView Setup
+6. History
+7. Diagnostics
 
 Recommended tester flow:
+
 1. Run `python scripts/run_gui.py`.
 2. Open `Live Analysis`, enter a ticker, choose a source mode, and click `Analyze`.
 3. Watch the run-status panel to see the requested source, source actually used, fallback chain, coverage, and failures if any.
 4. Open `Analysis Detail` to inspect the readable summary, source path, detailed analysis, and advanced diagnostics.
-5. Use `Replay Lab` when you want deterministic sample runs or webhook-style testing.
-6. Review `History` to confirm persistence across sessions.
-7. Open `TradingView Setup` when you are ready to connect a public webhook URL.
+5. Review `History` to confirm persistence across sessions.
+6. Open `TradingView Setup` when you are ready to connect a public webhook URL.
 
 Source modes in the GUI:
-- `auto`: tries live structured data first and falls back through the currently supported local source chain
-- `twelvedata`: runs direct live analysis from Twelve Data only
-- `webhook`: reuses already received TradingView webhook records for the requested symbol
-- `replay`: runs a sample payload through the replay path
-- `ocr`: shown as unavailable until OCR fallback exists
 
-## Replay And Testing Flow
-- Replay Lab in the GUI accepts TradingView-style JSON and routes it through the same validation and record-building path as `/webhook`.
-- Replayed records are written to the same JSONL log and reappear in History on restart.
-- Fixture-backed scans remain available for deterministic module and integration testing.
+- `auto`: tries live structured data first, then fresh stored webhook payloads if available, then bounded OCR fallback if configured; it does not fall back to replay/demo records
+- `twelvedata`: runs direct live analysis from Twelve Data only
+- `webhook`: reuses only fresh already received TradingView webhook records for the requested symbol
+- `ocr`: bounded screen-read fallback for visible ticker, timeframe, and price extraction only
+
+## OCR Screen-Read Fallback
+
+OCR is a fallback, not a replacement for structured live market data.
+
+Current OCR foundation:
+
+- local Windows-friendly configuration via `config/ocr_user.yaml`
+- reads visible chart information only
+- can attempt to extract:
+  - ticker symbol
+  - timeframe label
+  - current visible price
+- reports what is missing instead of inventing data
+
+Current OCR limitations:
+
+- it does not reconstruct OHLCV bars from the screen
+- it does not infer hidden higher-timeframe context
+- it does not claim a full multi-timeframe analysis when only partial chart text is visible
+- if OCR is disabled or not configured, the GUI shows a clear readable failure
+
+Internal replay/testing paths still exist for development and automated tests, but they are not part of the normal end-user GUI flow.
 
 Run a single fixture-backed scan from the command line:
 
@@ -130,13 +156,8 @@ Run a single fixture-backed scan from the command line:
 python scripts/run_scan.py --fixture tests/fixtures/daily_hourly_5m_trap_risk_clean.json --symbol NVDA
 ```
 
-Run the same fixture with the demo-qualified override:
-
-```powershell
-python scripts/run_scan.py --fixture tests/fixtures/daily_hourly_5m_trap_risk_clean.json --symbol NVDA --config-override config/demo.yaml
-```
-
 ## TradingView Webhook Setup
+
 Start the local webhook receiver:
 
 ```powershell
@@ -174,7 +195,8 @@ Expected JSON shape:
 ```
 
 TradingView setup steps:
-1. Open [stocknogs_breakout_webhook_template.pine](c:/Users/Apple/Desktop/stocknogs/pine/stocknogs_breakout_webhook_template.pine) in TradingView Pine Editor.
+
+1. Open [`pine/stocknogs_breakout_webhook_template.pine`](./pine/stocknogs_breakout_webhook_template.pine) in TradingView Pine Editor.
 2. Add the script to your chart.
 3. Create an alert on the indicator.
 4. Enable TradingView webhook delivery.
@@ -182,15 +204,19 @@ TradingView setup steps:
 6. Use the script's dynamic `alert()` message output for the webhook body.
 
 Notes:
+
 - The webhook URL must be publicly reachable by TradingView.
 - The local server example in this repo is useful for development, but TradingView cannot reach `127.0.0.1` directly.
-- The exact JSON contract is documented in [tradingview_webhook_contract.md](c:/Users/Apple/Desktop/stocknogs/docs/tradingview_webhook_contract.md).
+- Webhook mode is event-driven. It reuses only fresh TradingView alert payloads for the requested symbol.
+- The exact JSON contract is documented in [`docs/tradingview_webhook_contract.md`](./docs/tradingview_webhook_contract.md).
 
-## Run With Real Data
+## Run with Real Data
+
 Real structured market data paths currently available:
+
 - `yahoo`: public Yahoo Finance chart data, requires internet access and no API key
 - `twelvedata`: Twelve Data historical bars, requires internet access and `TWELVE_DATA_API_KEY`
-- `auto`: tries real providers in order and uses the first one that returns complete Daily, 1H, and 5m coverage
+- `auto`: tries real providers in order, then fresh webhook event reuse, then bounded OCR fallback if configured
 
 Run a one-symbol scan with real Daily, 1H, and 5m data:
 
@@ -216,14 +242,10 @@ Write the real-data scan record to disk:
 python scripts/run_scan.py --provider yahoo --symbol NVDA --output out/nvda_real_scan.json
 ```
 
-Fixture-backed mode remains available:
+## Diagnostics and Debugging
 
-```powershell
-python scripts/run_scan.py --provider fixture --fixture tests/fixtures/daily_hourly_5m_trap_risk_clean.json --symbol NVDA
-```
-
-## Diagnostics And Debugging
 Each record now carries first-class diagnostics payloads for:
+
 - Source selection
 - Fallback chain
 - Timeframe coverage
@@ -231,10 +253,12 @@ Each record now carries first-class diagnostics payloads for:
 - Missing fields
 - Strategy rule pass/fail context
 - Provider warnings
+- OCR capture/read warnings when screen-read fallback is attempted
 
 The GUI `Diagnostics` page shows the latest source, strategy, OCR placeholder, and system diagnostics in one place.
 
 ## Architecture
+
 - `src/services/`: market data access, webhook handling, GUI API, config loading, and logging
 - `src/analysis/`: source normalization and thesis generation
 - `src/scanner/`: orchestration and canonical record models
@@ -243,6 +267,7 @@ The GUI `Diagnostics` page shows the latest source, strategy, OCR placeholder, a
 - `tests/integration/`: end-to-end flow tests for scan, webhook, and GUI paths
 
 ## Current Limitations
+
 - Phase 1 adds the normalized snapshot and thesis skeleton, not the full preset engine.
 - Targets and invalidation remain rule-light and only use real available structure; missing targets show as `Not available yet`.
 - OCR and browser scraping fallback are not implemented yet.
@@ -250,10 +275,10 @@ The GUI `Diagnostics` page shows the latest source, strategy, OCR placeholder, a
 - No broker execution, order placement, ML, mobile, or cloud deployment is included.
 
 ## Next Build Direction
+
 The next implementation phase should add:
+
 - strategy preset evaluation
 - target / invalidation engine
 - richer thesis detail views in the GUI
 - deeper diagnostics for preset scoring and failure reasons
-#   f i n a l  
- 

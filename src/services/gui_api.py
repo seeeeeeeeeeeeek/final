@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -10,19 +9,20 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from src.analysis.source_manager import SourceManager
 from src.scanner.models import ScanConfig, SymbolContext
 from src.scanner.runner import ScanRunner
 from src.services.config_loader import load_optional_yaml, load_scan_config, reset_yaml, save_yaml
 from src.services.gui_html import build_index_html
-from src.services.gui_responses import build_detail_payload, build_replay_result_payload, sample_payloads
+from src.services.gui_responses import build_detail_payload, build_replay_result_payload
 from src.services.gui_state import GUIState
 from src.services.logging import SignalLogger
 from src.services.market_data import TwelveDataMarketDataProvider, YahooFinanceMarketDataProvider
+from src.services.ocr_screen import OCRScreenService
 from src.services.webhook_models import TradingViewWebhookPayload
 from src.services.webhook_server import WebhookProcessor
 
 _TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
+_FRESH_WEBHOOK_MAX_AGE_SECONDS = 15 * 60
 
 
 def _failed_run_state(source_mode: str, failure_reason: str) -> dict[str, Any]:
@@ -149,6 +149,7 @@ def _build_override_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], st
 class GUIApplication:
     processor: WebhookProcessor
     state: GUIState
+    ocr_service: OCRScreenService
     host: str
     port: int
     config_dir: Path
@@ -191,9 +192,11 @@ class GUIApplication:
         except ValueError as exc:
             return 400, {"ok": False, "error": str(exc)}
 
-        record = self.processor.build_record(payload)
-        record.diagnostics.source["requested_source_mode"] = source_mode_requested or ingest_mode
-        record.diagnostics.source["mode_kind"] = ingest_mode
+        record = self.processor.build_record(
+            payload,
+            ingest_mode=ingest_mode,
+            requested_source_mode=source_mode_requested,
+        )
         raw_payload = {
             **payload_dict,
             "_ingest_mode": ingest_mode,
@@ -206,16 +209,37 @@ class GUIApplication:
         symbol_context = SymbolContext(symbol=symbol)
 
         if source_mode == "ocr":
-            reason = "OCR fallback not implemented yet."
-            self.state.fail_run(reason, mode_kind="ocr")
-            return 400, {"ok": False, "error": reason, "run_state": self.state.run_state_payload()}
+            self.state.advance_run("Preparing screen read", mode_kind="ocr")
+            result = self.ocr_service.analyze(symbol)
+            warnings = list(result.warnings)
+            if result.capture_source:
+                warnings.insert(0, f"Capture source: {result.capture_source}")
+            reason = result.reason or "Screen-read fallback could not analyze this symbol."
+            self.state.fail_run(reason, source_class="unavailable", warnings=warnings, mode_kind="ocr")
+            return 400, {
+                "ok": False,
+                "error": reason,
+                "ocr_status": self.ocr_service.status_payload(),
+                "ocr_result": {
+                    "extracted": result.extracted,
+                    "missing_fields": result.missing_fields,
+                    "warnings": result.warnings,
+                    "capture_source": result.capture_source,
+                    "engine_available": result.engine_available,
+                },
+                "run_state": self.state.run_state_payload(),
+            }
 
         if source_mode == "webhook":
             self.state.advance_run("Waiting for webhook payload", mode_kind="webhook")
-            stored = self.state.get_latest_record_for_symbol(symbol, ingest_mode="webhook")
+            stored = self.state.get_latest_record_for_symbol(
+                symbol,
+                ingest_mode="webhook",
+                fresh_within_seconds=_FRESH_WEBHOOK_MAX_AGE_SECONDS,
+            )
             if stored is None:
-                reason = "No webhook payload available for requested symbol."
-                self.state.fail_run(reason, mode_kind="webhook")
+                reason = "No fresh webhook payload available for requested symbol."
+                self.state.fail_run(reason, source_class="unavailable", mode_kind="webhook")
                 return 400, {"ok": False, "error": reason, "run_state": self.state.run_state_payload()}
             self.state.complete_run(stored, source_mode=source_mode)
             return 200, {
@@ -226,13 +250,6 @@ class GUIApplication:
                 "run_state": self.state.run_state_payload(),
                 "reused_existing_record": True,
             }
-
-        if source_mode == "replay":
-            self.state.advance_run("Preparing display result", mode_kind="replay")
-            sample = dict(sample_payloads()["qualified"])
-            sample["symbol"] = symbol
-            sample["timestamp"] = _utc_now_iso()
-            return self.process_payload(sample, ingest_mode="replay", source_mode_requested="replay")
 
         provider_name: str
         fallback_chain: list[str] = []
@@ -263,6 +280,7 @@ class GUIApplication:
                 self.state.fail_run(
                     reason,
                     source_used=provider_name,
+                    source_class="unavailable",
                     warnings=warnings,
                     coverage=coverage,
                     mode_kind="live",
@@ -306,7 +324,11 @@ class GUIApplication:
                         warnings=warnings,
                         mode_kind="live",
                     )
-                    stored = self.state.get_latest_record_for_symbol(symbol, ingest_mode="webhook")
+                    stored = self.state.get_latest_record_for_symbol(
+                        symbol,
+                        ingest_mode="webhook",
+                        fresh_within_seconds=_FRESH_WEBHOOK_MAX_AGE_SECONDS,
+                    )
                     if stored is not None:
                         self.state.complete_run(stored, source_mode=source_mode)
                         return 200, {
@@ -317,10 +339,33 @@ class GUIApplication:
                             "run_state": self.state.run_state_payload(),
                             "reused_existing_record": True,
                         }
+
+                    self.state.advance_run(
+                        "Checking screen-read fallback",
+                        source_used="webhook_unavailable",
+                        fallback_chain=fallback_chain,
+                        coverage=yahoo_coverage,
+                        warnings=warnings,
+                        mode_kind="live",
+                    )
+                    ocr_status = self.ocr_service.status_payload()
+                    ocr_result = None
+                    if ocr_status["configured"]:
+                        fallback_chain.append("ocr")
+                        ocr_result = self.ocr_service.analyze(symbol)
+                        warnings.extend(ocr_result.warnings)
+                        if ocr_result.capture_source:
+                            warnings.append(f"OCR capture source: {ocr_result.capture_source}")
+                    elif ocr_status["enabled"]:
+                        warnings.append("Screen-read fallback is enabled but not configured yet.")
+
                     reason = "No supported source could produce usable data."
+                    if ocr_result is not None and ocr_result.reason:
+                        reason = ocr_result.reason
                     self.state.fail_run(
                         reason,
-                        source_used="webhook_unavailable",
+                        source_used="ocr_unavailable" if ocr_status["enabled"] else "webhook_unavailable",
+                        source_class="unavailable",
                         fallback_chain=fallback_chain,
                         warnings=warnings,
                         coverage=yahoo_coverage,
@@ -358,9 +403,7 @@ class GUIApplication:
             market_data_provider=provider,
             signal_logger=self.processor.signal_logger,
         )
-        record = runner.run_symbol(symbol_context)
-        record.diagnostics.source["requested_source_mode"] = source_mode
-        record.diagnostics.source["mode_kind"] = "live"
+        record = runner.run_symbol(symbol_context, requested_source_mode=source_mode, mode_kind="live")
         self.state.advance_run(
             "Preparing display result",
             source_used=provider_name,
@@ -386,10 +429,10 @@ class GUIApplication:
             return 400, {"ok": False, "error": reason, "run_state": self.state.run_state_payload()}
 
         self.state.start_run(symbol=symbol, source_mode=source_mode)
-        supported_modes = {"auto", "twelvedata", "webhook", "replay", "ocr"}
+        supported_modes = {"auto", "twelvedata", "webhook", "ocr"}
         if source_mode not in supported_modes:
             reason = f"Unsupported source mode: {source_mode}"
-            self.state.fail_run(reason)
+            self.state.fail_run(reason, source_class="unavailable")
             return 400, {"ok": False, "error": reason, "run_state": self.state.run_state_payload()}
 
         return self._run_live_scan(symbol=symbol, source_mode=source_mode)
@@ -400,14 +443,31 @@ class GUIApplication:
             port=server_port,
             current_config=self.processor.config,
         )
-        payload["payload_example"] = sample_payloads()["qualified"]
-        payload["sample_payloads"] = sample_payloads()
+        payload["payload_example"] = {
+            "symbol": "SPY",
+            "exchange": "NYSEARCA",
+            "timeframe": "5m",
+            "timestamp": "2026-04-01T13:35:00Z",
+            "close": 500.2,
+            "trend_pass": True,
+            "compression_pass": True,
+            "breakout_pass": True,
+            "trap_risk_elevated": False,
+            "compression_high": 499.8,
+            "compression_low": 496.4,
+            "trigger_level": 499.85,
+            "breakout_price": 500.2,
+            "breakout_range_vs_base_avg": 1.8,
+            "relative_volume": 1.4,
+            "rejection_wick_pct": 8.0,
+            "overhead_clearance_pct": 2.2,
+        }
+        payload["ocr_status"] = self.ocr_service.status_payload()
         payload["analyze_modes"] = [
             {"value": "auto", "label": "Auto"},
             {"value": "twelvedata", "label": "Twelve Data"},
             {"value": "webhook", "label": "TradingView webhook"},
-            {"value": "replay", "label": "Replay / sample"},
-            {"value": "ocr", "label": "OCR fallback (not implemented)", "disabled": True},
+            {"value": "ocr", "label": "Screen read fallback"},
         ]
         return payload
 
@@ -458,6 +518,7 @@ def create_gui_server(
             log_path=Path(log_path) if log_path is not None else None,
             override_path=override_file,
         ),
+        ocr_service=OCRScreenService((override_file.parent if override_file is not None else config_dir_path) / "ocr_user.yaml"),
         host=host,
         port=port,
         config_dir=config_dir_path,
@@ -496,7 +557,7 @@ def create_gui_server(
                 )
                 return
             if parsed.path == "/api/recent":
-                recent = [app.state.record_summary(stored) for stored in app.state.list_records(limit=6)]
+                recent = [app.state.record_summary(stored) for stored in app.state.list_recent_records(limit=6)]
                 self._write_json(200, {"ok": True, "records": recent})
                 return
             if parsed.path == "/api/records":

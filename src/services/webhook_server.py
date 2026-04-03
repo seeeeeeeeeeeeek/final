@@ -111,7 +111,13 @@ class WebhookProcessor:
             flags={"trap_risk_elevated": elevated},
         )
 
-    def build_record(self, payload: TradingViewWebhookPayload) -> Any:
+    def build_record(
+        self,
+        payload: TradingViewWebhookPayload,
+        *,
+        ingest_mode: str = "webhook",
+        requested_source_mode: str | None = None,
+    ) -> Any:
         source_manager = SourceManager()
         snapshot_result = source_manager.from_webhook(payload)
         trend_result = self._build_trend_result(payload)
@@ -190,6 +196,20 @@ class WebhookProcessor:
             record.explanations.no_trade_reason = reason
         record.thesis, record.diagnostics = build_thesis(record)
         record.diagnostics.source = snapshot_result.diagnostics
+        if ingest_mode == "replay":
+            record.diagnostics.source["requested_source_mode"] = requested_source_mode or "replay"
+            record.diagnostics.source["mode_kind"] = "replay"
+            record.diagnostics.source["source_class"] = "replay_demo"
+            record.diagnostics.source["source_class_label"] = "Replay/demo"
+            record.diagnostics.source["is_live"] = False
+            record.diagnostics.source["freshness_state"] = "synthetic"
+        else:
+            record.diagnostics.source["requested_source_mode"] = requested_source_mode or "webhook"
+            record.diagnostics.source["mode_kind"] = "webhook"
+            record.diagnostics.source["source_class"] = "webhook_fresh"
+            record.diagnostics.source["source_class_label"] = "Fresh webhook"
+            record.diagnostics.source["is_live"] = False
+            record.diagnostics.source["freshness_state"] = "fresh"
 
         validate_scan_record(record)
         self.signal_logger.log_signal(record)

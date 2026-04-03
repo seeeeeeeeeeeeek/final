@@ -40,6 +40,8 @@ class RunState:
     last_completed_step: str | None = None
     completed_steps: list[str] = field(default_factory=list)
     source_used: str | None = None
+    source_class: str | None = None
+    source_class_label: str | None = None
     fallback_chain: list[str] = field(default_factory=list)
     coverage: dict[str, bool] = field(default_factory=dict)
     missing_context: list[str] = field(default_factory=list)
@@ -87,6 +89,15 @@ def _record_sort_key(stored: StoredRecord) -> tuple[int, str]:
         return (1, parsed.isoformat())
     except ValueError:
         return (0, timestamp)
+
+
+def _parse_utc_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 @dataclass(slots=True)
@@ -156,21 +167,99 @@ class GUIState:
             records = records[:limit]
         return records
 
+    def list_recent_records(self, *, limit: int = 6) -> list[StoredRecord]:
+        records = list(self._records)
+        records.sort(
+            key=lambda stored: (self._source_rank(stored), _record_sort_key(stored)),
+            reverse=True,
+        )
+        return records[:limit]
+
     def get_record(self, scan_id: str) -> StoredRecord | None:
         for stored in self._records:
             if stored.record.scan_id == scan_id:
                 return stored
         return None
 
-    def get_latest_record_for_symbol(self, symbol: str, *, ingest_mode: str | None = None) -> StoredRecord | None:
+    def get_latest_record_for_symbol(
+        self,
+        symbol: str,
+        *,
+        ingest_mode: str | None = None,
+        fresh_within_seconds: int | None = None,
+    ) -> StoredRecord | None:
         symbol_upper = symbol.upper()
         for stored in self._records:
             if stored.record.symbol.upper() != symbol_upper:
                 continue
-            if ingest_mode is not None and stored.raw_payload.get("_ingest_mode") != ingest_mode:
+            stored_ingest_mode = stored.raw_payload.get("_ingest_mode") or stored.record.diagnostics.source.get("mode_kind")
+            if ingest_mode is not None and stored_ingest_mode != ingest_mode:
                 continue
+            if fresh_within_seconds is not None:
+                freshness = self._freshness_seconds(stored.record)
+                if freshness is None or freshness > fresh_within_seconds:
+                    continue
             return stored
         return None
+
+    def _freshness_seconds(self, record: ScanRecord) -> float | None:
+        parsed = _parse_utc_timestamp(record.timestamp_utc)
+        if parsed is None:
+            return None
+        return max(0.0, round((datetime.now(timezone.utc) - parsed).total_seconds(), 2))
+
+    def _freshness_state(self, record: ScanRecord, raw_payload: dict[str, Any]) -> str:
+        source = record.diagnostics.source or {}
+        explicit = source.get("freshness_state")
+        if explicit:
+            return str(explicit)
+        ingest_mode = raw_payload.get("_ingest_mode")
+        if ingest_mode == "replay":
+            return "synthetic"
+        if ingest_mode == "webhook" or record.snapshot.source_type == "webhook":
+            freshness = self._freshness_seconds(record)
+            if freshness is not None and freshness <= 15 * 60:
+                return "fresh"
+            return "stale"
+        if source.get("is_live") or record.snapshot.source_type == "structured_live":
+            return "live"
+        return "unknown"
+
+    def _source_class(self, record: ScanRecord, raw_payload: dict[str, Any]) -> str:
+        source = record.diagnostics.source or {}
+        explicit = source.get("source_class")
+        if explicit:
+            return str(explicit)
+        ingest_mode = raw_payload.get("_ingest_mode")
+        if ingest_mode == "replay":
+            return "replay_demo"
+        if ingest_mode == "webhook" or record.snapshot.source_type == "webhook":
+            freshness_state = self._freshness_state(record, raw_payload)
+            return "webhook_fresh" if freshness_state == "fresh" else "webhook_stale"
+        if source.get("is_live") or record.snapshot.source_type == "structured_live":
+            return "live_structured"
+        return "unavailable"
+
+    def _source_class_label(self, source_class: str) -> str:
+        labels = {
+            "live_structured": "Live data",
+            "webhook_fresh": "Fresh TradingView alert",
+            "webhook_stale": "Stored TradingView alert",
+            "replay_demo": "Replay/demo",
+            "unavailable": "Unavailable",
+        }
+        return labels.get(source_class, "Unavailable")
+
+    def _source_rank(self, stored: StoredRecord) -> int:
+        source_class = self._source_class(stored.record, stored.raw_payload)
+        ranks = {
+            "live_structured": 4,
+            "webhook_fresh": 3,
+            "webhook_stale": 2,
+            "replay_demo": 1,
+            "unavailable": 0,
+        }
+        return ranks.get(source_class, 0)
 
     def infer_bias(self, record: ScanRecord) -> str:
         if record.thesis.strategy_match == "Breakout Continuation":
@@ -270,9 +359,12 @@ class GUIState:
                 signals.append("Daily + 1H aligned")
             elif not coverage.get("1D") or not coverage.get("1H"):
                 signals.append("HTF missing")
-        source_used = record.thesis.source_used or record.snapshot.source_used
-        if source_used:
-            signals.append(f"{source_used.title()} source")
+        source_path = self.source_path(record, {})
+        signals.append(source_path["source_class_label"])
+        if source_path["freshness_state"] == "stale":
+            signals.append("Stale")
+        elif source_path["freshness_state"] == "synthetic":
+            signals.append("Testing only")
         if record.flags.daily_trend_pass and record.flags.compression_pass:
             signals.append("Trend + setup aligned")
         return signals[:3]
@@ -297,6 +389,9 @@ class GUIState:
         source = record.diagnostics.source or {}
         coverage = dict(source.get("timeframe_coverage", {}))
         missing_context = self._missing_context(coverage)
+        source_class = self._source_class(record, raw_payload)
+        freshness_state = self._freshness_state(record, raw_payload)
+        freshness_seconds = self._freshness_seconds(record)
         requested = (
             raw_payload.get("_requested_source_mode")
             or source.get("requested_source_mode")
@@ -314,11 +409,21 @@ class GUIState:
             "used": used,
             "fallback_chain": fallback_chain,
             "mode_kind": mode_kind,
+            "source_class": source_class,
+            "source_class_label": source.get("source_class_label") or self._source_class_label(source_class),
+            "freshness_state": freshness_state,
+            "freshness_seconds": freshness_seconds,
+            "freshness_text": (
+                f"{int(freshness_seconds)} seconds old"
+                if freshness_seconds is not None
+                else "Not available"
+            ),
             "coverage": coverage,
             "coverage_text": self._coverage_text(coverage),
             "missing_context": missing_context,
             "missing_context_text": ", ".join(missing_context) if missing_context else "None",
             "warnings": list(source.get("warnings", [])),
+            "is_live": bool(source.get("is_live")) if "is_live" in source else source_class == "live_structured",
         }
 
     def timeframe_story(self, record: ScanRecord) -> list[dict[str, str]]:
@@ -347,6 +452,13 @@ class GUIState:
         payload["best_action"] = self.best_action_label(stored.record)
         payload["trust_signals"] = self.trust_signals(stored.record)
         payload["source_path"] = source_path
+        payload["source_class_label"] = source_path["source_class_label"]
+        payload["freshness_state"] = source_path["freshness_state"]
+        payload["freshness_seconds"] = source_path["freshness_seconds"]
+        if source_path["source_class"] == "replay_demo":
+            payload["why_it_matters"] = f"Replay/demo result for testing. {payload['why_it_matters']}"
+        elif source_path["source_class"] == "webhook_stale":
+            payload["why_it_matters"] = f"Stored webhook result, not current live market data. {payload['why_it_matters']}"
         return payload
 
     def start_run(self, *, symbol: str, source_mode: str) -> None:
@@ -365,6 +477,7 @@ class GUIState:
         step: str,
         *,
         source_used: str | None = None,
+        source_class: str | None = None,
         fallback_chain: list[str] | None = None,
         coverage: dict[str, bool] | None = None,
         mode_kind: str | None = None,
@@ -377,6 +490,9 @@ class GUIState:
             self._run_state.current_step = step
             if source_used is not None:
                 self._run_state.source_used = source_used
+            if source_class is not None:
+                self._run_state.source_class = source_class
+                self._run_state.source_class_label = self._source_class_label(source_class)
             if fallback_chain is not None:
                 self._run_state.fallback_chain = list(fallback_chain)
             if coverage is not None:
@@ -387,10 +503,11 @@ class GUIState:
             if warnings is not None:
                 self._run_state.warnings = list(warnings)
 
-    def fail_run(self, reason: str, *, source_used: str | None = None, fallback_chain: list[str] | None = None, warnings: list[str] | None = None, coverage: dict[str, bool] | None = None, mode_kind: str | None = None) -> None:
+    def fail_run(self, reason: str, *, source_used: str | None = None, source_class: str | None = None, fallback_chain: list[str] | None = None, warnings: list[str] | None = None, coverage: dict[str, bool] | None = None, mode_kind: str | None = None) -> None:
         self.advance_run(
             "Failed",
             source_used=source_used,
+            source_class=source_class,
             fallback_chain=fallback_chain,
             warnings=warnings,
             coverage=coverage,
@@ -405,6 +522,7 @@ class GUIState:
         self.advance_run(
             "Completed",
             source_used=source_path["used"],
+            source_class=source_path["source_class"],
             fallback_chain=source_path["fallback_chain"],
             coverage=source_path["coverage"],
             mode_kind=source_path["mode_kind"],
@@ -426,6 +544,8 @@ class GUIState:
                 last_completed_step=self._run_state.last_completed_step,
                 completed_steps=list(self._run_state.completed_steps),
                 source_used=self._run_state.source_used,
+                source_class=self._run_state.source_class,
+                source_class_label=self._run_state.source_class_label,
                 fallback_chain=list(self._run_state.fallback_chain),
                 coverage=dict(self._run_state.coverage),
                 missing_context=list(self._run_state.missing_context),
@@ -444,6 +564,8 @@ class GUIState:
             "last_completed_step": state.last_completed_step,
             "completed_steps": state.completed_steps,
             "source_used": state.source_used,
+            "source_class": state.source_class,
+            "source_class_label": state.source_class_label,
             "fallback_chain": state.fallback_chain,
             "mode_kind": state.mode_kind,
             "timeframe_coverage": state.coverage,
