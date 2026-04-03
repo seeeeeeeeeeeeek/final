@@ -6,6 +6,7 @@ from time import perf_counter
 from typing import Any
 
 from src.scanner.models import MarketDataBundle, MarketSnapshot, SymbolContext
+from src.services.browser_source import BrowserExtractionResult
 from src.services.webhook_models import TradingViewWebhookPayload
 
 
@@ -164,6 +165,81 @@ class SourceManager:
             "missing_fields": missing_fields,
             "latency_ms": None,
             "warnings": [],
+        }
+        return SnapshotResult(snapshot=snapshot, diagnostics=diagnostics)
+
+    def from_browser(self, result: BrowserExtractionResult) -> SnapshotResult:
+        missing_fields = list(result.missing_fields)
+        coverage = {"1D": False, "1H": False, "5m": False, "1m": False}
+        latest_bar = None
+        if result.latest_visible_price is not None:
+            latest_bar = {
+                "timestamp_utc": result.timestamp_utc,
+                "open": None,
+                "high": None,
+                "low": None,
+                "close": result.latest_visible_price,
+                "volume": None,
+            }
+
+        snapshot = MarketSnapshot(
+            symbol=result.symbol_detected or result.symbol_requested,
+            source_type="browser",
+            source_confidence=0.45 if result.ok else 0.2,
+            source_used=result.source_name,
+            timestamp_utc=result.timestamp_utc,
+            daily={"timeframe": "1D", "bar_count": 0, "latest_bar": None, "indicators": {}, "visible_overlays": []},
+            hourly={"timeframe": "1H", "bar_count": 0, "latest_bar": None, "indicators": {}, "visible_overlays": []},
+            intraday_5m={
+                "timeframe": result.visible_timeframe or "visible_quote",
+                "bar_count": 1 if latest_bar else 0,
+                "latest_bar": latest_bar,
+                "indicators": {},
+                "visible_overlays": list(result.chart_regions_captured or []) + [result.page_url_attempted],
+            },
+            intraday_1m={"timeframe": "1m", "bar_count": 0, "latest_bar": None, "indicators": {}, "visible_overlays": []},
+            freshness_seconds=_freshness_seconds(result.timestamp_utc),
+            latency_ms=result.latency_ms,
+            fallback_chain=[],
+            missing_fields=missing_fields,
+            warnings=list(result.warnings),
+        )
+        diagnostics = {
+            "source_selected": result.source_name,
+            "source_type": "browser",
+            "source_class": result.trust_classification,
+            "adapter_kind": result.adapter_kind,
+            "browser_source_name": result.source_name,
+            "page_url_attempted": result.page_url_attempted,
+            "requested_url": result.requested_url,
+            "page_title": result.page_title,
+            "symbol_requested": result.symbol_requested,
+            "symbol_detected": result.symbol_detected,
+            "extraction_status": result.extraction_status,
+            "fields_extracted": list(result.fields_extracted),
+            "timeframe_coverage": coverage,
+            "freshness_seconds": snapshot.freshness_seconds,
+            "missing_fields": missing_fields,
+            "latency_ms": result.latency_ms,
+            "warnings": list(result.warnings),
+            "errors": list(result.errors),
+            "fallback_activated": True,
+            "extraction_completeness": result.extraction_completeness,
+            "screenshot_paths": dict(result.screenshot_paths),
+            "selector_debug": dict(result.selector_debug),
+            "chart_canvas_present": result.chart_canvas_present,
+            "chart_canvas_width": result.chart_canvas_width,
+            "chart_canvas_height": result.chart_canvas_height,
+            "chart_aria_label": result.chart_aria_label,
+            "price_axis_present": result.price_axis_present,
+            "price_axis_canvas_width": result.price_axis_canvas_width,
+            "price_axis_canvas_height": result.price_axis_canvas_height,
+            "time_axis_present": result.time_axis_present,
+            "time_axis_canvas_width": result.time_axis_canvas_width,
+            "time_axis_canvas_height": result.time_axis_canvas_height,
+            "visible_ticker_text": result.visible_ticker_text,
+            "visible_timeframe_text": result.visible_timeframe_text,
+            "chart_regions_captured": list(result.chart_regions_captured),
         }
         return SnapshotResult(snapshot=snapshot, diagnostics=diagnostics)
 

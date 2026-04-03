@@ -1,0 +1,18 @@
+twelvedata:
+  api_key: ''
+source_preferences:
+  default_mode: browser
+  webhook_fallback_enabled: true
+  browser_fallback_enabled: true
+  ocr_fallback_enabled: true
+browser:
+  provider: tradingview
+  headless: false
+  persist_screenshots: true
+  screenshot_dir: out/browser_artifacts
+  tradingview:
+    enabled: true
+    chart_url_template: ''
+    exchange_prefix: NASDAQ
+    page_load_timeout_ms: 15000
+    settle_wait_ms: 2500

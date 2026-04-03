@@ -1,0 +1,24 @@
+defaults:
+  trend_filter:
+    minimum_trend_strength_score: 60.0
+    minimum_slope_pct: 0.0
+  compression:
+    maximum_pullback_depth_pct: 35.0
+    minimum_range_contraction_pct: 20.0
+    minimum_volatility_contraction_pct: 15.0
+  breakout_trigger:
+    breakout_buffer_pct: 0.1
+    minimum_breakout_range_vs_base_avg: 1.5
+    minimum_relative_volume: 1.2
+  trap_risk:
+    maximum_distance_from_trend_ref_pct: 8.0
+    maximum_rejection_wick_pct: 25.0
+    minimum_overhead_clearance_pct: 2.0
+scoring:
+  scoring:
+    weights:
+      trend_alignment: 20.0
+      squeeze_quality: 25.0
+      breakout_impulse: 25.0
+      path_quality: 20.0
+      trap_risk_penalty: 10.0

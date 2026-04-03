@@ -9,9 +9,19 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from src.scanner.models import ScanConfig, SymbolContext
+from src.analysis.source_manager import SourceManager
+from src.analysis.thesis_engine import build_thesis
+from src.scanner.models import ExplanationPayload, ScanConfig, ScanStatus, SymbolContext, build_empty_scan_record
 from src.scanner.runner import ScanRunner
-from src.services.config_loader import load_optional_yaml, load_scan_config, reset_yaml, save_yaml
+from src.services.config_loader import (
+    load_optional_yaml,
+    load_scan_config,
+    load_source_settings,
+    reset_yaml,
+    save_source_settings,
+    save_yaml,
+)
+from src.services.browser_source import BrowserSourceManager
 from src.services.gui_html import build_index_html
 from src.services.gui_responses import build_detail_payload, build_replay_result_payload
 from src.services.gui_state import GUIState
@@ -20,6 +30,7 @@ from src.services.market_data import TwelveDataMarketDataProvider, YahooFinanceM
 from src.services.ocr_screen import OCRScreenService
 from src.services.webhook_models import TradingViewWebhookPayload
 from src.services.webhook_server import WebhookProcessor
+from src.utils.validation import validate_scan_record
 
 _TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 _FRESH_WEBHOOK_MAX_AGE_SECONDS = 15 * 60
@@ -72,6 +83,15 @@ def _make_provider(source_mode: str) -> Any:
         provider.source_name = "twelvedata"
         return provider
     raise ValueError(f"No live provider for source_mode={source_mode}")
+
+
+def _mask_secret(value: str | None) -> str | None:
+    if not value:
+        return None
+    trimmed = str(value).strip()
+    if len(trimmed) <= 4:
+        return "*" * len(trimmed)
+    return ("*" * max(0, len(trimmed) - 4)) + trimmed[-4:]
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -145,20 +165,312 @@ def _build_override_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], st
     return _drop_none(override), str(public_webhook_url).strip() or None
 
 
+def _build_source_settings_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    source_settings = dict(payload.get("source_settings", {}))
+    twelvedata = dict(source_settings.get("twelvedata", {}))
+    preferences = dict(source_settings.get("source_preferences", {}))
+    browser = dict(source_settings.get("browser", {}))
+    tradingview = dict(browser.get("tradingview", {}))
+    twelvedata_payload: dict[str, Any] = {}
+    if payload.get("clear_twelvedata_key"):
+        twelvedata_payload["api_key"] = ""
+    elif str(twelvedata.get("api_key", "") or "").strip():
+        twelvedata_payload["api_key"] = str(twelvedata.get("api_key", "") or "").strip()
+    return {
+        "twelvedata": twelvedata_payload,
+        "source_preferences": {
+            "default_mode": str(preferences.get("default_mode", "auto") or "auto").strip().lower(),
+            "webhook_fallback_enabled": bool(preferences.get("webhook_fallback_enabled", True)),
+            "browser_fallback_enabled": bool(preferences.get("browser_fallback_enabled", True)),
+            "ocr_fallback_enabled": bool(preferences.get("ocr_fallback_enabled", True)),
+        },
+        "browser": {
+            "provider": str(browser.get("provider", "yahoo") or "yahoo").strip().lower(),
+            "headless": bool(browser.get("headless", True)),
+            "persist_screenshots": bool(browser.get("persist_screenshots", True)),
+            "screenshot_dir": str(browser.get("screenshot_dir", "out/browser_artifacts") or "out/browser_artifacts"),
+            "tradingview": {
+                "enabled": bool(tradingview.get("enabled", False)),
+                "chart_url_template": str(tradingview.get("chart_url_template", "") or "").strip(),
+                "exchange_prefix": str(tradingview.get("exchange_prefix", "") or "").strip(),
+                "page_load_timeout_ms": int(tradingview.get("page_load_timeout_ms", 15000) or 15000),
+                "settle_wait_ms": int(tradingview.get("settle_wait_ms", 2500) or 2500),
+            },
+        },
+    }
+
+
 @dataclass(slots=True)
 class GUIApplication:
     processor: WebhookProcessor
     state: GUIState
+    browser_service: BrowserSourceManager
     ocr_service: OCRScreenService
     host: str
     port: int
     config_dir: Path
     override_path: Path | None = None
     demo_override_path: Path | None = None
+    source_settings_path: Path | None = None
 
     def reload_config(self) -> ScanConfig:
         self.processor.config = load_scan_config(self.config_dir, override_path=self.override_path)
         return self.processor.config
+
+    def source_settings(self) -> dict[str, Any]:
+        if self.source_settings_path is None:
+            return load_source_settings(self.config_dir / "gui_sources.yaml")
+        return load_source_settings(self.source_settings_path)
+
+    def _twelvedata_api_key(self) -> str | None:
+        source_settings = self.source_settings()
+        api_key = str(source_settings.get("twelvedata", {}).get("api_key", "") or "").strip()
+        return api_key or None
+
+    def _source_preferences(self) -> dict[str, Any]:
+        return dict(self.source_settings().get("source_preferences", {}))
+
+    def _build_browser_record(
+        self,
+        symbol: str,
+        *,
+        requested_source_mode: str = "browser",
+        fallback_chain: list[str] | None = None,
+        inherited_warnings: list[str] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        fallback_chain = list(fallback_chain or [])
+        inherited_warnings = list(inherited_warnings or [])
+        self.state.advance_run("Preparing browser extraction", mode_kind="browser")
+        self.state.advance_run("Opening supported page", mode_kind="browser")
+        self.state.advance_run("Waiting for page content", mode_kind="browser")
+        self.state.advance_run("Searching symbol", mode_kind="browser")
+        self.state.advance_run("Extracting visible data", mode_kind="browser")
+        result = self.browser_service.extract_symbol(symbol)
+        warnings = list(inherited_warnings) + list(result.warnings)
+        if result.errors:
+            warnings.extend(result.errors)
+        if not result.ok:
+            reason = result.errors[0] if result.errors else "No supported browser adapter could handle this request."
+            self.state.fail_run(
+                reason,
+                source_used=result.source_name,
+                source_class="browser_failed",
+                fallback_chain=fallback_chain,
+                warnings=warnings,
+                mode_kind="browser",
+            )
+            return 400, {
+                "ok": False,
+                "error": reason,
+                "browser_result": {
+                    "source_name": result.source_name,
+                    "page_url_attempted": result.page_url_attempted,
+                "fields_extracted": result.fields_extracted,
+                "missing_fields": result.missing_fields,
+                "warnings": result.warnings,
+                "errors": result.errors,
+                "selector_debug": result.selector_debug,
+                "screenshot_paths": result.screenshot_paths,
+                },
+                "run_state": self.state.run_state_payload(),
+            }
+
+        self.state.advance_run(
+            "Normalizing extracted values",
+            source_used=result.source_name,
+            source_class="browser_partial" if result.extraction_completeness == "partial" else "browser_fresh",
+            fallback_chain=fallback_chain,
+            warnings=warnings,
+            mode_kind="browser",
+        )
+        source_manager = SourceManager()
+        snapshot_result = source_manager.from_browser(result)
+        record = build_empty_scan_record(
+            symbol,
+            scan_id=f"browser-{symbol}-{result.timestamp_utc or _utc_now_iso()}",
+            config_version=self.processor.config.defaults.get("version", "v1-defaults"),
+            status=ScanStatus.SKIPPED,
+        )
+        record.timestamp_utc = result.timestamp_utc or _utc_now_iso()
+        record.snapshot = snapshot_result.snapshot
+        record.metrics.update(
+            {
+                "browser_source_name": result.source_name,
+                "browser_adapter_kind": result.adapter_kind,
+                "browser_page_url_attempted": result.page_url_attempted,
+                "browser_requested_url": result.requested_url,
+                "browser_page_title": result.page_title,
+                "visible_quote_price": result.latest_visible_price,
+                "browser_visible_ticker_text": result.visible_ticker_text,
+                "visible_timeframe": result.visible_timeframe,
+                "browser_chart_canvas_present": result.chart_canvas_present,
+                "browser_chart_canvas_width": result.chart_canvas_width,
+                "browser_chart_canvas_height": result.chart_canvas_height,
+                "browser_price_axis_present": result.price_axis_present,
+                "browser_price_axis_canvas_width": result.price_axis_canvas_width,
+                "browser_price_axis_canvas_height": result.price_axis_canvas_height,
+                "browser_time_axis_present": result.time_axis_present,
+                "browser_time_axis_canvas_width": result.time_axis_canvas_width,
+                "browser_time_axis_canvas_height": result.time_axis_canvas_height,
+                "browser_screenshot_count": len(result.screenshot_paths),
+                "fields_extracted_count": len(result.fields_extracted),
+                "extraction_completeness": result.extraction_completeness,
+            }
+        )
+        if result.latest_visible_price is not None:
+            record.levels.breakout_price = result.latest_visible_price
+        summary = "Browser data found current price, but higher timeframe context is missing."
+        reasons = [
+            "Browser extraction succeeded for visible quote data only.",
+            f"Browser source opened {result.source_name.replace('_', ' ')}.",
+            "Higher timeframe bars were not available from the visible page.",
+        ]
+        if result.adapter_kind == "tradingview":
+            summary = "TradingView browser extraction found visible chart context, but structured higher timeframe data is still missing."
+            reasons = [
+                "TradingView browser extraction captured visible ticker, timeframe, and chart canvas data only.",
+                "The result stays browser-extracted partial context, not structured OHLCV.",
+                "Higher timeframe bars and hidden indicator values were not inferred from canvas visuals.",
+            ]
+        record.explanations = ExplanationPayload(
+            summary=summary,
+            reasons=reasons,
+            skip_reason="Not enough structured timeframe context was available from the browser page.",
+        )
+        record.debug.data_quality_warnings.extend(result.warnings)
+        record.thesis, record.diagnostics = build_thesis(record)
+        record.thesis.explanation_summary = record.explanations.summary
+        record.thesis.explanation_reasons = list(record.explanations.reasons)
+        record.diagnostics.source = snapshot_result.diagnostics
+        record.diagnostics.source["requested_source_mode"] = requested_source_mode
+        record.diagnostics.source["mode_kind"] = "browser"
+        record.diagnostics.source["source_class"] = result.trust_classification
+        record.diagnostics.source["source_class_label"] = self.state._source_class_label(result.trust_classification)
+        record.diagnostics.source["is_live"] = False
+        record.diagnostics.source["freshness_state"] = "fresh"
+        record.diagnostics.source["fallback_chain"] = list(fallback_chain)
+        record.diagnostics.system["warnings"] = list(record.debug.data_quality_warnings)
+        validate_scan_record(record)
+        self.processor.signal_logger.log_signal(record)
+        self.state.advance_run(
+            "Building analysis record",
+            source_used=result.source_name,
+            source_class=result.trust_classification,
+            fallback_chain=fallback_chain,
+            warnings=warnings,
+            mode_kind="browser",
+        )
+        raw_payload = {
+            "_ingest_mode": "browser",
+            "_requested_source_mode": requested_source_mode,
+            "_symbol": symbol,
+            "browser_source_name": result.source_name,
+            "page_url_attempted": result.page_url_attempted,
+            "browser_adapter_kind": result.adapter_kind,
+            "selector_debug": result.selector_debug,
+            "screenshot_paths": result.screenshot_paths,
+        }
+        return self._store_record_response(record, raw_payload, source_mode_requested=requested_source_mode)
+
+    def _make_live_provider(self, source_mode: str) -> Any:
+        if source_mode == "twelvedata":
+            provider = TwelveDataMarketDataProvider(api_key=self._twelvedata_api_key())
+            provider.source_name = "twelvedata"
+            return provider
+        return _make_provider(source_mode)
+
+    def _masked_source_settings_payload(self) -> dict[str, Any]:
+        source_settings = self.source_settings()
+        source_preferences = dict(source_settings.get("source_preferences", {}))
+        api_key = str(source_settings.get("twelvedata", {}).get("api_key", "") or "").strip()
+        browser = dict(source_settings.get("browser", {}))
+        tradingview = dict(browser.get("tradingview", {}))
+        return {
+            "twelvedata": {
+                "configured": bool(api_key),
+                "masked_api_key": _mask_secret(api_key),
+            },
+            "source_preferences": {
+                "default_mode": source_preferences.get("default_mode", "auto"),
+                "webhook_fallback_enabled": bool(source_preferences.get("webhook_fallback_enabled", True)),
+                "browser_fallback_enabled": bool(source_preferences.get("browser_fallback_enabled", True)),
+                "ocr_fallback_enabled": bool(source_preferences.get("ocr_fallback_enabled", True)),
+                "auto_priority": [
+                    "Twelve Data",
+                    "Yahoo fallback",
+                    "Fresh TradingView webhook",
+                    "TRADINGVIEW LIVE fallback",
+                    "Screen read fallback",
+                ],
+            },
+            "browser": {
+                "provider": str(browser.get("provider", "yahoo") or "yahoo"),
+                "headless": bool(browser.get("headless", True)),
+                "persist_screenshots": bool(browser.get("persist_screenshots", True)),
+                "screenshot_dir": str(browser.get("screenshot_dir", "out/browser_artifacts") or "out/browser_artifacts"),
+                "tradingview": {
+                    "enabled": bool(tradingview.get("enabled", False)),
+                    "chart_url_configured": bool(str(tradingview.get("chart_url_template", "") or "").strip()),
+                    "exchange_prefix": str(tradingview.get("exchange_prefix", "") or ""),
+                    "page_load_timeout_ms": int(tradingview.get("page_load_timeout_ms", 15000) or 15000),
+                    "settle_wait_ms": int(tradingview.get("settle_wait_ms", 2500) or 2500),
+                },
+            },
+        }
+
+    def test_twelvedata_connection(self, payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+        payload = payload or {}
+        incoming_api_key = str(payload.get("api_key", "") or "").strip()
+        api_key = incoming_api_key or self._twelvedata_api_key()
+        if not api_key:
+            return 400, {
+                "ok": False,
+                "status": "not_configured",
+                "message": "No Twelve Data API key is saved yet.",
+            }
+
+        provider = TwelveDataMarketDataProvider(
+            api_key=api_key,
+            daily_outputsize=2,
+            hourly_outputsize=2,
+            intraday_outputsize=2,
+        )
+        bundle = provider.get_symbol_data(SymbolContext(symbol="SPY"))
+        warnings = list(bundle.warnings)
+        coverage = _bundle_coverage(bundle)
+        if all(coverage.get(name) for name in ("1D", "1H", "5m")):
+            return 200, {
+                "ok": True,
+                "status": "connected",
+                "message": "Twelve Data connection is working.",
+                "coverage": coverage,
+                "warnings": warnings,
+            }
+
+        warning_text = " ".join(warnings).lower()
+        if "api key" in warning_text or "invalid api key" in warning_text:
+            return 400, {
+                "ok": False,
+                "status": "invalid_key",
+                "message": "Twelve Data rejected the saved API key.",
+                "coverage": coverage,
+                "warnings": warnings,
+            }
+        if any("failed to fetch" in warning.lower() for warning in warnings):
+            return 400, {
+                "ok": False,
+                "status": "network_error",
+                "message": "The app could not reach Twelve Data right now.",
+                "coverage": coverage,
+                "warnings": warnings,
+            }
+        return 400, {
+            "ok": False,
+            "status": "provider_unavailable",
+            "message": "Twelve Data did not return enough data to validate the connection.",
+            "coverage": coverage,
+            "warnings": warnings,
+        }
 
     def _store_record_response(
         self,
@@ -230,6 +542,9 @@ class GUIApplication:
                 "run_state": self.state.run_state_payload(),
             }
 
+        if source_mode == "browser":
+            return self._build_browser_record(symbol, requested_source_mode=source_mode)
+
         if source_mode == "webhook":
             self.state.advance_run("Waiting for webhook payload", mode_kind="webhook")
             stored = self.state.get_latest_record_for_symbol(
@@ -256,11 +571,12 @@ class GUIApplication:
         warnings: list[str] = []
         coverage: dict[str, bool] = {}
         bundle = None
+        source_preferences = self._source_preferences()
 
         if source_mode == "twelvedata":
             self.state.advance_run("Checking Twelve Data", mode_kind="live")
             provider_name = "twelvedata"
-            provider = _make_provider(provider_name)
+            provider = self._make_live_provider(provider_name)
             bundle = provider.get_symbol_data(symbol_context)
             warnings = list(bundle.warnings)
             coverage = _bundle_coverage(bundle)
@@ -288,7 +604,7 @@ class GUIApplication:
                 return 400, {"ok": False, "error": reason, "run_state": self.state.run_state_payload()}
         else:
             self.state.advance_run("Checking Twelve Data", mode_kind="live")
-            primary_provider = _make_provider("twelvedata")
+            primary_provider = self._make_live_provider("twelvedata")
             primary_bundle = primary_provider.get_symbol_data(symbol_context)
             warnings.extend(primary_bundle.warnings)
             coverage = _bundle_coverage(primary_bundle)
@@ -316,19 +632,21 @@ class GUIApplication:
                     coverage = yahoo_coverage
                 else:
                     fallback_chain.append("yahoo")
-                    self.state.advance_run(
-                        "Waiting for webhook payload",
-                        source_used="yahoo",
-                        fallback_chain=fallback_chain,
-                        coverage=yahoo_coverage,
-                        warnings=warnings,
-                        mode_kind="live",
-                    )
-                    stored = self.state.get_latest_record_for_symbol(
-                        symbol,
-                        ingest_mode="webhook",
-                        fresh_within_seconds=_FRESH_WEBHOOK_MAX_AGE_SECONDS,
-                    )
+                    stored = None
+                    if source_preferences.get("webhook_fallback_enabled", True):
+                        self.state.advance_run(
+                            "Waiting for webhook payload",
+                            source_used="yahoo",
+                            fallback_chain=fallback_chain,
+                            coverage=yahoo_coverage,
+                            warnings=warnings,
+                            mode_kind="live",
+                        )
+                        stored = self.state.get_latest_record_for_symbol(
+                            symbol,
+                            ingest_mode="webhook",
+                            fresh_within_seconds=_FRESH_WEBHOOK_MAX_AGE_SECONDS,
+                        )
                     if stored is not None:
                         self.state.complete_run(stored, source_mode=source_mode)
                         return 200, {
@@ -340,24 +658,41 @@ class GUIApplication:
                             "reused_existing_record": True,
                         }
 
-                    self.state.advance_run(
-                        "Checking screen-read fallback",
-                        source_used="webhook_unavailable",
-                        fallback_chain=fallback_chain,
-                        coverage=yahoo_coverage,
-                        warnings=warnings,
-                        mode_kind="live",
-                    )
+                    if source_preferences.get("browser_fallback_enabled", True):
+                        fallback_chain.append("browser")
+                        browser_status = self.browser_service.status_payload()
+                        if browser_status.get("playwright_available"):
+                            return self._build_browser_record(
+                                symbol,
+                                requested_source_mode=source_mode,
+                                fallback_chain=fallback_chain,
+                                inherited_warnings=warnings,
+                            )
+                        warnings.append("Browser fallback is enabled but Playwright is not installed.")
+
                     ocr_status = self.ocr_service.status_payload()
                     ocr_result = None
-                    if ocr_status["configured"]:
+                    if source_preferences.get("ocr_fallback_enabled", True):
+                        self.state.advance_run(
+                            "Checking screen-read fallback",
+                            source_used="webhook_unavailable",
+                            fallback_chain=fallback_chain,
+                            coverage=yahoo_coverage,
+                            warnings=warnings,
+                            mode_kind="live",
+                        )
+                    if source_preferences.get("ocr_fallback_enabled", True) and ocr_status["configured"]:
                         fallback_chain.append("ocr")
                         ocr_result = self.ocr_service.analyze(symbol)
                         warnings.extend(ocr_result.warnings)
                         if ocr_result.capture_source:
                             warnings.append(f"OCR capture source: {ocr_result.capture_source}")
-                    elif ocr_status["enabled"]:
+                    elif source_preferences.get("ocr_fallback_enabled", True) and ocr_status["enabled"]:
                         warnings.append("Screen-read fallback is enabled but not configured yet.")
+                    elif not source_preferences.get("webhook_fallback_enabled", True):
+                        warnings.append("TradingView webhook fallback is disabled in source settings.")
+                    elif not source_preferences.get("ocr_fallback_enabled", True):
+                        warnings.append("Screen-read fallback is disabled in source settings.")
 
                     reason = "No supported source could produce usable data."
                     if ocr_result is not None and ocr_result.reason:
@@ -429,7 +764,7 @@ class GUIApplication:
             return 400, {"ok": False, "error": reason, "run_state": self.state.run_state_payload()}
 
         self.state.start_run(symbol=symbol, source_mode=source_mode)
-        supported_modes = {"auto", "twelvedata", "webhook", "ocr"}
+        supported_modes = {"auto", "twelvedata", "webhook", "browser", "ocr"}
         if source_mode not in supported_modes:
             reason = f"Unsupported source mode: {source_mode}"
             self.state.fail_run(reason, source_class="unavailable")
@@ -463,10 +798,13 @@ class GUIApplication:
             "overhead_clearance_pct": 2.2,
         }
         payload["ocr_status"] = self.ocr_service.status_payload()
+        payload["browser_status"] = self.browser_service.status_payload()
+        payload["source_settings"] = self._masked_source_settings_payload()
         payload["analyze_modes"] = [
             {"value": "auto", "label": "Auto"},
             {"value": "twelvedata", "label": "Twelve Data"},
             {"value": "webhook", "label": "TradingView webhook"},
+            {"value": "browser", "label": "TRADINGVIEW LIVE"},
             {"value": "ocr", "label": "Screen read fallback"},
         ]
         return payload
@@ -476,6 +814,8 @@ class GUIApplication:
             raise ValueError("GUI settings override path is not configured.")
         override_payload, public_webhook_url = _build_override_payload(payload)
         save_yaml(self.override_path, override_payload)
+        if self.source_settings_path is not None:
+            save_source_settings(self.source_settings_path, _build_source_settings_payload(payload))
         self.state.public_webhook_url = public_webhook_url
         self.reload_config()
         return {"ok": True, "message": "Settings saved locally.", "settings": self.settings_response(server_port=self.port)}
@@ -483,6 +823,8 @@ class GUIApplication:
     def reset_settings(self) -> dict[str, Any]:
         if self.override_path is not None:
             reset_yaml(self.override_path)
+        if self.source_settings_path is not None:
+            reset_yaml(self.source_settings_path)
         self.state.public_webhook_url = None
         self.reload_config()
         return {"ok": True, "message": "Settings reset to defaults.", "settings": self.settings_response(server_port=self.port)}
@@ -496,6 +838,20 @@ class GUIApplication:
         self.reload_config()
         return {"ok": True, "message": "Demo preset loaded.", "settings": self.settings_response(server_port=self.port)}
 
+    def delete_record(self, scan_id: str) -> tuple[int, dict[str, Any]]:
+        if not self.state.delete_record(scan_id):
+            return 404, {"ok": False, "error": "Record not found."}
+        return 200, {"ok": True, "message": "Record deleted.", "run_state": self.state.run_state_payload()}
+
+    def clear_records(self, payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+        payload = payload or {}
+        symbol = str(payload.get("symbol", "") or "").strip() or None
+        deleted_count = self.state.clear_records(symbol=symbol)
+        if deleted_count == 0:
+            return 200, {"ok": True, "message": "No matching records to clear.", "deleted_count": 0}
+        label = f" for {symbol.upper()}" if symbol else ""
+        return 200, {"ok": True, "message": f"Cleared {deleted_count} record(s){label}.", "deleted_count": deleted_count}
+
 
 def create_gui_server(
     *,
@@ -508,6 +864,7 @@ def create_gui_server(
 ) -> ThreadingHTTPServer:
     config_dir_path = Path(config_dir)
     override_file = Path(override_path) if override_path is not None else None
+    source_settings_file = (override_file.parent if override_file is not None else config_dir_path) / "gui_sources.yaml"
     app = GUIApplication(
         processor=WebhookProcessor(
             config=load_scan_config(config_dir_path, override_path=override_file),
@@ -518,12 +875,14 @@ def create_gui_server(
             log_path=Path(log_path) if log_path is not None else None,
             override_path=override_file,
         ),
+        browser_service=BrowserSourceManager(settings_path=source_settings_file),
         ocr_service=OCRScreenService((override_file.parent if override_file is not None else config_dir_path) / "ocr_user.yaml"),
         host=host,
         port=port,
         config_dir=config_dir_path,
         override_path=override_file,
         demo_override_path=Path(demo_override_path) if demo_override_path is not None else None,
+        source_settings_path=source_settings_file,
     )
 
     class GUIHandler(BaseHTTPRequestHandler):
@@ -540,6 +899,10 @@ def create_gui_server(
                 return
             if parsed.path == "/api/settings":
                 self._write_json(200, app.settings_response(server_port=self.server.server_port))
+                return
+            if parsed.path == "/api/source-settings/test-twelvedata":
+                status_code, payload = app.test_twelvedata_connection()
+                self._write_json(status_code, payload)
                 return
             if parsed.path == "/api/diagnostics":
                 recent_record = app.state.list_records(limit=1)
@@ -596,8 +959,10 @@ def create_gui_server(
                 "/api/analyze",
                 "/webhook",
                 "/api/settings/save",
+                "/api/source-settings/test-twelvedata",
                 "/api/settings/reset",
                 "/api/settings/load-demo",
+                "/api/records/clear",
             }:
                 self._write_json(404, {"ok": False, "error": "Not found."})
                 return
@@ -625,15 +990,35 @@ def create_gui_server(
                 if self.path == "/api/settings/save":
                     self._write_json(200, app.save_settings(payload))
                     return
+                if self.path == "/api/source-settings/test-twelvedata":
+                    status_code, response = app.test_twelvedata_connection(payload)
+                    self._write_json(status_code, response)
+                    return
                 if self.path == "/api/settings/reset":
                     self._write_json(200, app.reset_settings())
                     return
                 if self.path == "/api/settings/load-demo":
                     self._write_json(200, app.load_demo_settings())
                     return
+                if self.path == "/api/records/clear":
+                    status_code, response = app.clear_records(payload)
+                    self._write_json(status_code, response)
+                    return
             except ValueError as exc:
                 self._write_json(400, {"ok": False, "error": str(exc)})
                 return
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            if not parsed.path.startswith("/api/records/"):
+                self._write_json(404, {"ok": False, "error": "Not found."})
+                return
+            scan_id = parsed.path.removeprefix("/api/records/")
+            if not scan_id:
+                self._write_json(400, {"ok": False, "error": "Record id is required."})
+                return
+            status_code, response = app.delete_record(scan_id)
+            self._write_json(status_code, response)
 
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
             return

@@ -144,6 +144,34 @@ class GUIState:
         self._records.sort(key=_record_sort_key, reverse=True)
         self._records = self._records[: self.max_records]
 
+    def _persist_records_to_log(self) -> None:
+        if self.log_path is None:
+            return
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.log_path.open("w", encoding="utf-8") as handle:
+            for stored in sorted(self._records, key=_record_sort_key, reverse=True):
+                handle.write(json.dumps(stored.record.to_dict(), sort_keys=True) + "\n")
+
+    def delete_record(self, scan_id: str) -> bool:
+        before = len(self._records)
+        self._records = [stored for stored in self._records if stored.record.scan_id != scan_id]
+        deleted = len(self._records) != before
+        if deleted:
+            self._persist_records_to_log()
+        return deleted
+
+    def clear_records(self, *, symbol: str | None = None) -> int:
+        before = len(self._records)
+        if symbol:
+            symbol_upper = symbol.upper()
+            self._records = [stored for stored in self._records if stored.record.symbol.upper() != symbol_upper]
+        else:
+            self._records = []
+        deleted_count = before - len(self._records)
+        if deleted_count:
+            self._persist_records_to_log()
+        return deleted_count
+
     def list_records(
         self,
         *,
@@ -221,6 +249,8 @@ class GUIState:
             if freshness is not None and freshness <= 15 * 60:
                 return "fresh"
             return "stale"
+        if record.snapshot.source_type == "browser":
+            return "fresh" if self._freshness_seconds(record) is not None else "unknown"
         if source.get("is_live") or record.snapshot.source_type == "structured_live":
             return "live"
         return "unknown"
@@ -236,6 +266,8 @@ class GUIState:
         if ingest_mode == "webhook" or record.snapshot.source_type == "webhook":
             freshness_state = self._freshness_state(record, raw_payload)
             return "webhook_fresh" if freshness_state == "fresh" else "webhook_stale"
+        if record.snapshot.source_type == "browser":
+            return str(source.get("source_class") or "browser_partial")
         if source.get("is_live") or record.snapshot.source_type == "structured_live":
             return "live_structured"
         return "unavailable"
@@ -245,6 +277,9 @@ class GUIState:
             "live_structured": "Live data",
             "webhook_fresh": "Fresh TradingView alert",
             "webhook_stale": "Stored TradingView alert",
+            "browser_fresh": "Browser extracted",
+            "browser_partial": "Browser extracted",
+            "browser_failed": "Browser unavailable",
             "replay_demo": "Replay/demo",
             "unavailable": "Unavailable",
         }
@@ -256,6 +291,9 @@ class GUIState:
             "live_structured": 4,
             "webhook_fresh": 3,
             "webhook_stale": 2,
+            "browser_fresh": 2,
+            "browser_partial": 1,
+            "browser_failed": 0,
             "replay_demo": 1,
             "unavailable": 0,
         }
@@ -303,6 +341,10 @@ class GUIState:
         return "Very low"
 
     def confidence_explanation(self, record: ScanRecord) -> str:
+        if record.snapshot.source_type == "browser":
+            if record.metrics.get("browser_adapter_kind") == "tradingview":
+                return "Low confidence because TradingView browser extraction found visible chart context only and higher timeframe bars are still missing."
+            return "Low confidence because browser extraction found visible quote data only and higher timeframe context is missing."
         coverage = record.diagnostics.source.get("timeframe_coverage", {}) if record.diagnostics.source else {}
         missing = [name for name, available in coverage.items() if not available and name != "1m"]
         if missing:
@@ -361,6 +403,8 @@ class GUIState:
                 signals.append("HTF missing")
         source_path = self.source_path(record, {})
         signals.append(source_path["source_class_label"])
+        if record.snapshot.source_type == "browser":
+            signals.append("Chart canvas captured" if record.metrics.get("browser_chart_canvas_present") else "Visible quote only")
         if source_path["freshness_state"] == "stale":
             signals.append("Stale")
         elif source_path["freshness_state"] == "synthetic":
@@ -586,8 +630,8 @@ class GUIState:
     ) -> dict[str, Any]:
         active_webhook_url = self.public_webhook_url or f"http://{host}:{port}/webhook"
         return {
-            "mode": "webhook-first",
-            "demo_replay_enabled": True,
+            "mode": "live-first",
+            "demo_replay_enabled": False,
             "webhook_enabled": True,
             "webhook_endpoint": f"http://{host}:{port}/webhook",
             "public_webhook_url": self.public_webhook_url,

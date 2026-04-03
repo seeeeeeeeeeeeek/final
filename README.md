@@ -44,13 +44,15 @@ Priority order:
 
 1. Structured live OHLCV and indicator-ready data
 2. Fresh TradingView webhook events
-3. OCR/screen-read fallback
-4. Clear diagnostic failure if nothing usable is available
+3. Browser extraction fallback
+4. OCR/screen-read fallback
+5. Clear diagnostic failure if nothing usable is available
 
 Current Phase 1 implementation:
 
 - Twelve Data and Yahoo style structured OHLCV providers remain available
 - TradingView webhook payloads normalize into the same internal snapshot model
+- Browser extraction is available as a bounded Playwright fallback for explicit supported page patterns
 - Source, fallback chain, freshness, latency, and missing-field diagnostics are attached to records
 - OCR screen-read fallback now has a bounded foundation for visible ticker, timeframe, and price extraction only
 - OCR does not fabricate OHLCV bars or hidden higher-timeframe context
@@ -67,6 +69,7 @@ Notes:
 
 - The key is not stored in repo config files.
 - The code does not intentionally log the key.
+- The GUI can now store the key locally for that user machine and masks it after save.
 
 ## Run the GUI
 
@@ -92,12 +95,15 @@ GUI notes:
 
 - Record history is loaded from the GUI JSONL log on startup.
 - Local setting changes are stored in `config/gui_user.yaml` by default.
+- Local live-source settings are stored separately in `config/gui_sources.yaml`.
 - The GUI remains Python-only and reuses the same webhook, scoring, explanation, snapshot, thesis, and logging backend paths.
 - The interface prioritizes simple summaries first and advanced technical details second.
 - Analysis Detail leads with user-readable action summaries, target/invalidation guidance, confidence explanations, and timeframe story before exposing engine-shaped technical output.
 - The Live Analysis page includes an `Analyze Ticker` control, source-mode selection, and a run-status panel that shows source path, coverage, fallback chain, and readable failure messages while a run is happening.
 - The GUI now separates `Live data`, `Fresh TradingView alert`, and `Stored TradingView alert` results so stale event input is not mistaken for current structured live market analysis.
+- Browser-extracted results are clearly labeled and remain lower-trust than structured live data.
 - Screen-read fallback is shown as a bounded OCR fallback only. It is honest about what it can and cannot read.
+- Users can save, clear, and test their own Twelve Data API key from the GUI settings page.
 
 ## GUI Workflow
 
@@ -120,12 +126,29 @@ Recommended tester flow:
 5. Review `History` to confirm persistence across sessions.
 6. Open `TradingView Setup` when you are ready to connect a public webhook URL.
 
+Settings workflow:
+
+1. Open `Strategy Settings`.
+2. Paste your Twelve Data API key into the live-source section.
+3. Click `Test connection` to validate the key.
+4. Save settings locally.
+5. Choose the default source mode and whether Auto may use webhook and OCR fallback.
+
 Source modes in the GUI:
 
-- `auto`: tries live structured data first, then fresh stored webhook payloads if available, then bounded OCR fallback if configured; it does not fall back to replay/demo records
+- `auto`: tries live structured data first, then fresh stored webhook payloads if available, then bounded browser extraction, then bounded OCR fallback if configured; it does not fall back to replay/demo records
 - `twelvedata`: runs direct live analysis from Twelve Data only
 - `webhook`: reuses only fresh already received TradingView webhook records for the requested symbol
+- `browser`: opens a supported public page and extracts only what is visibly available from that page
 - `ocr`: bounded screen-read fallback for visible ticker, timeframe, and price extraction only
+
+Source preferences:
+
+- default analyze mode can be set per user
+- Auto can allow or disallow:
+  - fresh TradingView webhook fallback
+  - OCR screen-read fallback
+- the saved Twelve Data key is masked in normal settings responses after save
 
 ## OCR Screen-Read Fallback
 
@@ -147,6 +170,55 @@ Current OCR limitations:
 - it does not infer hidden higher-timeframe context
 - it does not claim a full multi-timeframe analysis when only partial chart text is visible
 - if OCR is disabled or not configured, the GUI shows a clear readable failure
+
+## Browser Extraction Fallback
+
+Browser extraction is a bounded Playwright-based fallback, not a general scraping framework.
+
+Current supported pages:
+
+- Yahoo Finance public stock quote pages such as `https://finance.yahoo.com/quote/SPY`
+- TradingView chart pages when a local chart URL template is configured in browser source settings
+
+What browser mode can currently extract:
+
+- visible symbol heading
+- visible current quote price from Yahoo quote pages
+- visible TradingView ticker text
+- visible TradingView timeframe text
+- TradingView chart-canvas metadata and chart-region artifacts
+- page URL attempted
+- extraction latency and field completeness
+
+What browser mode does not do:
+
+- reconstruct OHLCV bars from page fragments
+- infer hidden higher timeframe context
+- support arbitrary websites
+- automate login or bypass site protections
+- parse hidden canvas bars or indicators from TradingView visuals
+
+TradingView browser extraction specifics:
+
+- uses a configured chart URL template such as `https://www.tradingview.com/chart/{chart_id}/?symbol={exchange_symbol}`
+- captures bounded browser artifacts under `out/browser_artifacts/tradingview/`
+- records selector/debug metadata for ticker, timeframe, chart canvas, price axis, and bottom time axis when available
+- remains lower trust than structured live data and fresh webhook events
+
+Browser mode is labeled below structured live data on purpose. If it only finds the current visible quote, the app says that directly and lowers trust accordingly.
+
+## Twelve Data Connection Test
+
+The GUI includes a simple connection test for Twelve Data.
+
+Possible results:
+
+- connection is working
+- no API key saved yet
+- invalid key
+- provider/network unavailable
+
+The main GUI shows a readable result first. Technical warnings remain available through diagnostics when needed.
 
 Internal replay/testing paths still exist for development and automated tests, but they are not part of the normal end-user GUI flow.
 
@@ -216,7 +288,8 @@ Real structured market data paths currently available:
 
 - `yahoo`: public Yahoo Finance chart data, requires internet access and no API key
 - `twelvedata`: Twelve Data historical bars, requires internet access and `TWELVE_DATA_API_KEY`
-- `auto`: tries real providers in order, then fresh webhook event reuse, then bounded OCR fallback if configured
+- `browser`: bounded Yahoo Finance quote extraction or configured TradingView chart extraction, requires Playwright
+- `auto`: tries real providers in order, then fresh webhook event reuse, then browser extraction, then bounded OCR fallback if configured
 
 Run a one-symbol scan with real Daily, 1H, and 5m data:
 
@@ -270,7 +343,8 @@ The GUI `Diagnostics` page shows the latest source, strategy, OCR placeholder, a
 
 - Phase 1 adds the normalized snapshot and thesis skeleton, not the full preset engine.
 - Targets and invalidation remain rule-light and only use real available structure; missing targets show as `Not available yet`.
-- OCR and browser scraping fallback are not implemented yet.
+- Browser fallback is implemented in a bounded way for supported Yahoo/TradingView page patterns only.
+- OCR fallback remains bounded and does not reconstruct hidden chart state.
 - The app is local-first and Windows-friendly, but not packaged in this step.
 - No broker execution, order placement, ML, mobile, or cloud deployment is included.
 

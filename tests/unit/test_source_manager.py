@@ -1,5 +1,6 @@
 from src.analysis.source_manager import SourceManager
 from src.scanner.models import MarketDataBundle, MarketDataSlice, SymbolContext
+from src.services.browser_source import BrowserExtractionResult
 from src.services.webhook_models import TradingViewWebhookPayload
 
 
@@ -40,3 +41,37 @@ def test_source_manager_builds_webhook_snapshot_without_inventing_missing_fields
     assert result.snapshot.intraday_5m["latest_bar"]["close"] == 500.25
     assert result.diagnostics["source_selected"] == "tradingview_webhook"
     assert "5m.compression_high" in result.snapshot.missing_fields
+
+
+def test_source_manager_builds_browser_snapshot_without_faking_timeframes() -> None:
+    manager = SourceManager()
+    result = manager.from_browser(
+        BrowserExtractionResult(
+            ok=True,
+            source_name="yahoo_quote_page",
+            adapter_kind="yahoo",
+            page_url_attempted="https://finance.yahoo.com/quote/SPY",
+            symbol_requested="SPY",
+            symbol_detected="SPY",
+            timestamp_utc="2026-04-02T12:00:00Z",
+            latest_visible_price=523.11,
+            visible_timeframe=None,
+            fields_extracted=["symbol", "latest_visible_price"],
+            missing_fields=["1D.bars", "1H.bars", "5m.bars"],
+            warnings=["Browser extraction found visible quote data only."],
+            errors=[],
+            latency_ms=1200.0,
+            extraction_status="partial",
+            extraction_completeness="partial",
+            trust_classification="browser_partial",
+            screenshot_paths={"page": "out/browser_artifacts/yahoo/SPY_page.png"},
+        )
+    )
+    assert result.snapshot.source_type == "browser"
+    assert result.snapshot.source_used == "yahoo_quote_page"
+    assert result.snapshot.intraday_5m["latest_bar"]["close"] == 523.11
+    assert result.diagnostics["source_class"] == "browser_partial"
+    assert result.diagnostics["adapter_kind"] == "yahoo"
+    assert result.diagnostics["browser_source_name"] == "yahoo_quote_page"
+    assert result.diagnostics["timeframe_coverage"]["1D"] is False
+    assert "1D.bars" in result.snapshot.missing_fields

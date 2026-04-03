@@ -240,7 +240,8 @@ def build_index_html() -> str:
               <button class="ghost" id="open-latest-result">Open latest result</button>
               <button class="ghost" id="clear-current-selection">Clear current selection</button>
             </div>
-            <div class="footer-note">Auto tries live data first, then a fresh TradingView alert for the same symbol, then screen-read fallback if configured.</div>
+            <div class="footer-note">Auto tries live data first, then a fresh TradingView alert, then TRADINGVIEW LIVE browser context, then screen-read fallback if configured.</div>
+            <div id="browser-status-panel" class="summary-stack" style="margin-top:14px;"></div>
             <div id="ocr-status-panel" class="summary-stack" style="margin-top:14px;"></div>
           </div>
           <div class="card status-panel">
@@ -279,7 +280,7 @@ def build_index_html() -> str:
             <div><label>Start date</label><input id="history-start-date" type="date"></div>
             <div><label>End date</label><input id="history-end-date" type="date"></div>
           </div>
-          <div class="button-row"><button class="ghost" id="history-refresh">Refresh</button></div>
+          <div class="button-row"><button class="ghost" id="history-refresh">Refresh</button><button class="ghost" id="history-clear-visible">Clear visible records</button></div>
           <div class="table" style="margin-top:12px;">
             <div class="table-header"><div>Symbol</div><div>Time</div><div>Setup</div><div>Confidence</div><div>Summary</div></div>
             <div id="history-table"></div>
@@ -296,6 +297,7 @@ def build_index_html() -> str:
     let settingsCache = null;
     let selectedScanId = null;
     let runStatePoller = null;
+    let clearTwelveDataRequested = false;
     function statusClass(status) { return `status-${status}`; }
     function prettyStatus(status) { return String(status || '').replace('_', ' ').replace(/\\b\\w/g, (char) => char.toUpperCase()); }
     function displayStatus(record) { return record.setup_status_label || prettyStatus(record.status); }
@@ -342,6 +344,15 @@ def build_index_html() -> str:
       if (ocr.configured && !ocr.engine_available && ocr.capture_source !== 'Manual OCR text hint') { warnings.push('OCR engine is not installed for image extraction.'); }
       return `<div class="section-title">Screen Read Fallback</div><div class="helper-copy">Fallback only. It can read visible chart text when structured live data is unavailable.</div><div class="summary-line"><strong>Status</strong><span>${escapeHtml(ocr.configured ? 'Configured' : 'Not configured')}</span></div><div class="summary-line"><strong>Capture source</strong><span>${escapeHtml(ocr.capture_source || 'Not configured')}</span></div><div class="summary-line"><strong>Can extract now</strong><span>${escapeHtml(ocr.can_extract_live ? 'Yes' : 'No')}</span></div><div class="summary-line"><strong>Config path</strong><span>${escapeHtml(ocr.config_path || 'Not available')}</span></div>${warnings.length ? `<div class="helper-copy">${warnings.map((warning) => escapeHtml(warning)).join(' ')}</div>` : '<div class="helper-copy">OCR fallback is ready to attempt visible ticker, timeframe, and price extraction only.</div>'}`;
     }
+    function renderBrowserStatus(status) {
+      const browser = status || {};
+      const supported = browser.supported_sources || [];
+      const supportedText = supported.length ? supported.map((item) => item.display_name).join(', ') : 'No supported pages';
+      const warnings = [];
+      const tradingview = browser.tradingview || {};
+      if (!browser.playwright_available) { warnings.push('Playwright is not installed, so browser fallback cannot run yet.'); }
+      return `<div class="section-title">TRADINGVIEW LIVE</div><div class="helper-copy">Bounded fallback only. This mode can use configured TradingView live chart pages and still remains partial browser context only. If Yahoo is the current provider, the app will say so directly instead of implying TradingView is active.</div><div class="summary-line"><strong>Status</strong><span>${escapeHtml(browser.playwright_available ? 'Available' : 'Unavailable')}</span></div><div class="summary-line"><strong>Current provider</strong><span>${escapeHtml(browser.current_provider_label || browser.current_provider || 'Yahoo Finance quote page')}</span></div><div class="summary-line"><strong>Supported pages</strong><span>${escapeHtml(supportedText)}</span></div><div class="summary-line"><strong>Headless</strong><span>${escapeHtml(browser.headless ? 'Yes' : 'No')}</span></div><div class="summary-line"><strong>TradingView configured</strong><span>${escapeHtml(tradingview.chart_url_configured ? 'Yes' : 'No')}</span></div>${warnings.length ? `<div class="helper-copy">${warnings.map((warning) => escapeHtml(warning)).join(' ')}</div>` : '<div class="helper-copy">TRADINGVIEW LIVE currently supports configured TradingView live chart pages and, when selected as provider, can also fall back to Yahoo quote extraction without fabricating missing timeframe context.</div>'}`;
+    }
     function kvRows(entries) {
       if (!entries || !Object.keys(entries).length) { return '<div class="muted small">Not available yet.</div>'; }
       return Object.entries(entries).map(([key, value]) => `<div class="kv-row"><div class="label">${escapeHtml(key)}</div><div class="mono">${escapeHtml(JSON.stringify(value))}</div></div>`).join('');
@@ -350,6 +361,10 @@ def build_index_html() -> str:
     async function loadRunState() { return fetchJson('/api/run-state'); }
     function buildSettingsFields(settings) {
       const editable = settings.editable_settings;
+      const sourceSettings = settings.source_settings || {};
+      const twelvedata = sourceSettings.twelvedata || {};
+      const preferences = sourceSettings.source_preferences || {};
+      const browser = sourceSettings.browser || {};
       const groups = [
         ['Trend Filter', 'trend_filter', [['minimum_trend_strength_score', 'Minimum trend strength'], ['minimum_slope_pct', 'Minimum slope %']]],
         ['Compression', 'compression', [['maximum_pullback_depth_pct', 'Max pullback depth %'], ['minimum_range_contraction_pct', 'Min range contraction %'], ['minimum_volatility_contraction_pct', 'Min volatility contraction %']]],
@@ -357,20 +372,52 @@ def build_index_html() -> str:
         ['Trap Risk', 'trap_risk', [['maximum_distance_from_trend_ref_pct', 'Max trend distance %'], ['maximum_rejection_wick_pct', 'Max rejection wick %'], ['minimum_overhead_clearance_pct', 'Min overhead clearance %']]],
         ['Scoring Weights', 'scoring', [['trend_alignment', 'Trend alignment weight'], ['squeeze_quality', 'Squeeze quality weight'], ['breakout_impulse', 'Breakout impulse weight'], ['path_quality', 'Path quality weight'], ['trap_risk_penalty', 'Trap-risk penalty weight']]],
       ];
-      return groups.map(([title, key, fields]) => `<div class="card"><h3>${title}</h3>${fields.map(([fieldKey, label]) => `<div style="margin-top:10px;"><label>${label}</label><input data-settings-group="${key}" data-settings-key="${fieldKey}" value="${editable[key][fieldKey] ?? ''}"></div>`).join('')}</div>`).join('') + `<div class="card"><h3>Webhook Visibility</h3><div class="small muted">Use a public tunnel URL here if you want the setup page to show a copy-ready TradingView endpoint.</div><div style="margin-top:10px;"><label>Public webhook URL</label><input id="settings-public-webhook-url" value="${settings.public_webhook_url ?? ''}" placeholder="https://your-public-endpoint.example/webhook"></div><div class="footer-note">Override file: ${escapeHtml(settings.override_path || 'Not configured')}</div></div>`;
+        return groups.map(([title, key, fields]) => `<div class="card"><h3>${title}</h3>${fields.map(([fieldKey, label]) => `<div style="margin-top:10px;"><label>${label}</label><input data-settings-group="${key}" data-settings-key="${fieldKey}" value="${editable[key][fieldKey] ?? ''}"></div>`).join('')}</div>`).join('')
+          + `<div class="card"><h3>Live Data Source</h3><div class="small muted">Use your own Twelve Data API key to unlock structured live market data inside the app.</div><div style="margin-top:10px;"><label>Twelve Data API key</label><input id="settings-twelvedata-api-key" type="password" value="" placeholder="${escapeHtml(twelvedata.configured ? (twelvedata.masked_api_key || 'Saved locally') : 'Enter your Twelve Data API key')}"></div><div class="summary-stack"><div class="summary-line"><strong>Saved key</strong><span>${escapeHtml(twelvedata.configured ? (twelvedata.masked_api_key || 'Saved') : 'Not saved')}</span></div><div class="summary-line"><strong>Default analyze mode</strong><span>${escapeHtml(preferences.default_mode || 'auto')}</span></div></div><div class="button-row"><button class="ghost" id="settings-test-twelvedata">Test connection</button><button class="ghost" id="settings-clear-twelvedata">Clear saved key</button></div><div class="helper-copy">The key is stored locally on this machine only and is not shown back in full after save.</div></div>`
+          + `<div class="card"><h3>Source Preferences</h3><div class="small muted">Keep Auto understandable: live data first, then fresh TradingView alert reuse, then TRADINGVIEW LIVE browser context, then screen-read fallback if enabled.</div><div style="margin-top:10px;"><label>Default source mode</label><select id="settings-default-source-mode"><option value="auto" ${preferences.default_mode === 'auto' ? 'selected' : ''}>Auto</option><option value="twelvedata" ${preferences.default_mode === 'twelvedata' ? 'selected' : ''}>Twelve Data</option><option value="webhook" ${preferences.default_mode === 'webhook' ? 'selected' : ''}>TradingView webhook</option><option value="browser" ${preferences.default_mode === 'browser' ? 'selected' : ''}>TRADINGVIEW LIVE</option><option value="ocr" ${preferences.default_mode === 'ocr' ? 'selected' : ''}>Screen read fallback</option></select></div><div style="margin-top:10px;"><label><input id="settings-webhook-fallback-enabled" type="checkbox" style="width:auto;" ${preferences.webhook_fallback_enabled !== false ? 'checked' : ''}> Allow fresh TradingView alert fallback</label></div><div style="margin-top:10px;"><label><input id="settings-browser-fallback-enabled" type="checkbox" style="width:auto;" ${preferences.browser_fallback_enabled !== false ? 'checked' : ''}> Allow TRADINGVIEW LIVE fallback</label></div><div style="margin-top:10px;"><label><input id="settings-ocr-fallback-enabled" type="checkbox" style="width:auto;" ${preferences.ocr_fallback_enabled !== false ? 'checked' : ''}> Allow screen-read fallback</label></div><div class="footer-note">Auto order: ${(preferences.auto_priority || ['Twelve Data', 'Yahoo fallback', 'Fresh TradingView webhook', 'TRADINGVIEW LIVE fallback', 'Screen read fallback']).map((item) => escapeHtml(item)).join(' -> ')}</div></div>`
+          + `<div class="card"><h3>TRADINGVIEW LIVE Browser Settings</h3><div class="small muted">Choose which browser provider is active. If you want TradingView browser extraction, save the chart URL template here first.</div><div style="margin-top:10px;"><label>Browser provider</label><select id="settings-browser-provider"><option value="yahoo" ${browser.provider === 'yahoo' ? 'selected' : ''}>Yahoo Finance quote page</option><option value="tradingview" ${browser.provider === 'tradingview' ? 'selected' : ''}>TradingView live chart page</option></select></div><div style="margin-top:10px;"><label><input id="settings-browser-headless" type="checkbox" style="width:auto;" ${browser.headless !== false ? 'checked' : ''}> Run browser headless</label></div><div style="margin-top:10px;"><label><input id="settings-browser-persist-screenshots" type="checkbox" style="width:auto;" ${browser.persist_screenshots !== false ? 'checked' : ''}> Save browser screenshots</label></div><div style="margin-top:10px;"><label>Screenshot directory</label><input id="settings-browser-screenshot-dir" value="${escapeHtml(browser.screenshot_dir || 'out/browser_artifacts')}"></div><div style="margin-top:16px;"><label><input id="settings-browser-tradingview-enabled" type="checkbox" style="width:auto;" ${browser.tradingview?.enabled ? 'checked' : ''}> Enable TradingView browser extraction</label></div><div style="margin-top:10px;"><label>TradingView chart URL template</label><input id="settings-browser-tradingview-chart-url-template" value="${escapeHtml(browser.tradingview?.chart_url_template || '')}" placeholder="https://www.tradingview.com/chart/yourChartId/?symbol={exchange_symbol}"></div><div style="margin-top:10px;"><label>Exchange prefix</label><input id="settings-browser-tradingview-exchange-prefix" value="${escapeHtml(browser.tradingview?.exchange_prefix || '')}" placeholder="AMEX"></div><div class="settings-grid" style="margin-top:10px;"><div><label>Page load timeout (ms)</label><input id="settings-browser-tradingview-page-load-timeout-ms" value="${escapeHtml(String(browser.tradingview?.page_load_timeout_ms || 15000))}"></div><div><label>Settle wait (ms)</label><input id="settings-browser-tradingview-settle-wait-ms" value="${escapeHtml(String(browser.tradingview?.settle_wait_ms || 2500))}"></div></div><div class="helper-copy">After you click Save, the Live Analysis status panel should show Current provider = TradingView live chart page and TradingView configured = Yes.</div></div>`
+          + `<div class="card"><h3>Webhook Visibility</h3><div class="small muted">Use a public tunnel URL here if you want the setup page to show a copy-ready TradingView endpoint.</div><div style="margin-top:10px;"><label>Public webhook URL</label><input id="settings-public-webhook-url" value="${settings.public_webhook_url ?? ''}" placeholder="https://your-public-endpoint.example/webhook"></div><div class="footer-note">Override file: ${escapeHtml(settings.override_path || 'Not configured')}</div></div>`;
     }
     function renderAnalyzeModeOptions(settings) {
       const select = document.getElementById('analyze-source-mode');
       if (!select) { return; }
       const modes = settings.analyze_modes || [];
       select.innerHTML = modes.map((mode) => `<option value="${escapeHtml(mode.value)}" ${mode.disabled ? 'disabled' : ''}>${escapeHtml(mode.label)}</option>`).join('');
-      if (!select.value) { select.value = 'auto'; }
+      select.value = settings.source_settings?.source_preferences?.default_mode || 'auto';
     }
     function currentSettingsPayload() {
       const editable = { trend_filter: {}, compression: {}, breakout_trigger: {}, trap_risk: {}, scoring: {} };
       document.querySelectorAll('[data-settings-group]').forEach((input) => { editable[input.dataset.settingsGroup][input.dataset.settingsKey] = input.value; });
-      return { editable_settings: editable, public_webhook_url: document.getElementById('settings-public-webhook-url')?.value || null };
-    }
+      return {
+        editable_settings: editable,
+        public_webhook_url: document.getElementById('settings-public-webhook-url')?.value || null,
+        clear_twelvedata_key: clearTwelveDataRequested,
+        source_settings: {
+          twelvedata: {
+            api_key: document.getElementById('settings-twelvedata-api-key')?.value || '',
+          },
+            source_preferences: {
+              default_mode: document.getElementById('settings-default-source-mode')?.value || 'auto',
+              webhook_fallback_enabled: !!document.getElementById('settings-webhook-fallback-enabled')?.checked,
+              browser_fallback_enabled: !!document.getElementById('settings-browser-fallback-enabled')?.checked,
+              ocr_fallback_enabled: !!document.getElementById('settings-ocr-fallback-enabled')?.checked,
+            },
+            browser: {
+              provider: document.getElementById('settings-browser-provider')?.value || 'yahoo',
+              headless: !!document.getElementById('settings-browser-headless')?.checked,
+              persist_screenshots: !!document.getElementById('settings-browser-persist-screenshots')?.checked,
+              screenshot_dir: document.getElementById('settings-browser-screenshot-dir')?.value || 'out/browser_artifacts',
+              tradingview: {
+                enabled: !!document.getElementById('settings-browser-tradingview-enabled')?.checked,
+                chart_url_template: document.getElementById('settings-browser-tradingview-chart-url-template')?.value || '',
+                exchange_prefix: document.getElementById('settings-browser-tradingview-exchange-prefix')?.value || '',
+                page_load_timeout_ms: Number(document.getElementById('settings-browser-tradingview-page-load-timeout-ms')?.value || 15000),
+                settle_wait_ms: Number(document.getElementById('settings-browser-tradingview-settle-wait-ms')?.value || 2500),
+              },
+            },
+          },
+        };
+      }
     async function renderHome() {
       const [health, settings, recentPayload] = await Promise.all([fetchJson('/api/health'), settingsCache ? Promise.resolve(settingsCache) : loadSettings(), fetchJson('/api/recent')]);
       const cards = [['App Status', health.app_status], ['Webhook Status', health.webhook_status], ['Webhook URL', settings.active_webhook_url], ['Stored Records', String(health.record_count)]];
@@ -419,6 +466,18 @@ def build_index_html() -> str:
       if (clearSelection) { clearSelection.onclick = clearCurrentSelection; }
       setPage('detail');
     }
+    async function deleteRecord(scanId) {
+      await fetchJson(`/api/records/${encodeURIComponent(scanId)}`, { method: 'DELETE' });
+      if (selectedScanId === scanId) { clearCurrentSelection(); }
+      await refreshAll();
+    }
+    async function clearHistory() {
+      const symbol = document.getElementById('history-symbol').value.trim().toUpperCase();
+      const payload = symbol ? { symbol } : {};
+      await fetchJson('/api/records/clear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      clearCurrentSelection();
+      await refreshAll();
+    }
     async function renderHistory() {
       const query = new URLSearchParams();
       const symbol = document.getElementById('history-symbol').value.trim();
@@ -433,8 +492,9 @@ def build_index_html() -> str:
       const records = payload.records || [];
       const table = document.getElementById('history-table');
       if (!records.length) { table.innerHTML = '<div class="empty-state">No records match the current filters.</div>'; return; }
-      table.innerHTML = records.map((record) => `<div class="table-row" data-scan-id="${record.scan_id}"><div><strong>${escapeHtml(record.symbol)}</strong><div class="helper-copy">${escapeHtml(record.bias)}</div></div><div>${escapeHtml(record.timestamp_utc)}</div><div class="${statusClass(record.status)}">${escapeHtml(displayStatus(record))}<div class="helper-copy">${escapeHtml(record.source_class_label || 'Unknown')}</div></div><div>${escapeHtml(record.confidence_label)}</div><div>${escapeHtml(record.why_it_matters)}<div class="chip-row"><span class="chip-soft">${escapeHtml(record.short_term_target || 'No target yet')}</span></div></div></div>`).join('');
-      document.querySelectorAll('#history-table [data-scan-id]').forEach((row) => { row.onclick = () => loadDetail(row.dataset.scanId); });
+      table.innerHTML = records.map((record) => `<div class="table-row" data-scan-id="${record.scan_id}"><div><strong>${escapeHtml(record.symbol)}</strong><div class="helper-copy">${escapeHtml(record.bias)}</div><div class="button-row" style="margin-top:8px;"><button class="ghost" data-delete-scan-id="${record.scan_id}">Delete</button></div></div><div>${escapeHtml(record.timestamp_utc)}</div><div class="${statusClass(record.status)}">${escapeHtml(displayStatus(record))}<div class="helper-copy">${escapeHtml(record.source_class_label || 'Unknown')}</div></div><div>${escapeHtml(record.confidence_label)}</div><div>${escapeHtml(record.why_it_matters)}<div class="chip-row"><span class="chip-soft">${escapeHtml(record.short_term_target || 'No target yet')}</span></div></div></div>`).join('');
+      document.querySelectorAll('#history-table [data-scan-id]').forEach((row) => { row.onclick = (event) => { if (event.target.closest('[data-delete-scan-id]')) { return; } loadDetail(row.dataset.scanId); }; });
+      document.querySelectorAll('#history-table [data-delete-scan-id]').forEach((button) => { button.onclick = async (event) => { event.stopPropagation(); await deleteRecord(button.dataset.deleteScanId); }; });
     }
     async function renderTradingViewSetup() {
       const settings = settingsCache || await loadSettings();
@@ -454,10 +514,17 @@ def build_index_html() -> str:
     }
     async function renderSettings() {
       const settings = settingsCache || await loadSettings();
+      clearTwelveDataRequested = false;
       document.getElementById('settings-form').innerHTML = buildSettingsFields(settings);
       renderAnalyzeModeOptions(settings);
+      const testButton = document.getElementById('settings-test-twelvedata');
+      if (testButton) { testButton.onclick = testTwelveDataConnection; }
+      const clearButton = document.getElementById('settings-clear-twelvedata');
+      if (clearButton) { clearButton.onclick = clearTwelveDataKey; }
       const ocrPanel = document.getElementById('ocr-status-panel');
       if (ocrPanel) { ocrPanel.innerHTML = renderOcrStatus(settings.ocr_status || {}); }
+      const browserPanel = document.getElementById('browser-status-panel');
+      if (browserPanel) { browserPanel.innerHTML = renderBrowserStatus(settings.browser_status || {}); }
     }
     function clearCurrentSelection() {
       selectedScanId = null;
@@ -528,8 +595,29 @@ def build_index_html() -> str:
     async function saveSettings() {
       const payload = await fetchJson('/api/settings/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(currentSettingsPayload()) });
       settingsCache = payload.settings;
+      clearTwelveDataRequested = false;
       document.getElementById('settings-result').textContent = payload.message;
       await refreshAll();
+    }
+    async function testTwelveDataConnection() {
+      const result = document.getElementById('settings-result');
+      try {
+        const apiKey = document.getElementById('settings-twelvedata-api-key')?.value || '';
+        const payload = await fetchJson('/api/source-settings/test-twelvedata', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: apiKey }),
+        });
+        result.textContent = payload.message;
+      } catch (error) {
+        result.textContent = String(error.message || error);
+      }
+    }
+    function clearTwelveDataKey() {
+      const input = document.getElementById('settings-twelvedata-api-key');
+      if (input) { input.value = ''; }
+      clearTwelveDataRequested = true;
+      document.getElementById('settings-result').textContent = 'The saved Twelve Data key will be cleared when you click Save.';
     }
     async function resetSettings() {
       const payload = await fetchJson('/api/settings/reset', { method: 'POST' });
@@ -553,6 +641,7 @@ def build_index_html() -> str:
     if (document.getElementById('replay-submit')) { document.getElementById('replay-submit').onclick = submitReplay; }
     if (document.getElementById('replay-validate')) { document.getElementById('replay-validate').onclick = validateReplayJson; }
     document.getElementById('history-refresh').onclick = renderHistory;
+    document.getElementById('history-clear-visible').onclick = clearHistory;
     document.getElementById('settings-save').onclick = saveSettings;
     document.getElementById('settings-reset').onclick = resetSettings;
     if (document.getElementById('settings-demo')) { document.getElementById('settings-demo').onclick = loadDemoPreset; }
