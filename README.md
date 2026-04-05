@@ -222,6 +222,26 @@ The main GUI shows a readable result first. Technical warnings remain available 
 
 Internal replay/testing paths still exist for development and automated tests, but they are not part of the normal end-user GUI flow.
 
+## Project Update Summaries
+
+Use this helper whenever you finish a change and want a timestamped summary file:
+
+```powershell
+python scripts/log_update.py --title "Home page search improvements" --summary "Added ticker search, price summary, and quick charts to Home." --detail "Added /api/search-symbol endpoint." --detail "Added Home search panel UI and sparkline charts."
+```
+
+What it does:
+
+- Creates a new file in `docs/updates/` named like `2026-04-05_153210_home-page-search-improvements.md`
+- Appends that file to `docs/updates/INDEX.md`
+- Auto-detects changed files from git status when a git repo is available
+
+If you want to list files manually:
+
+```powershell
+python scripts/log_update.py --title "Refactor scanner flow" --summary "Split runner orchestration into smaller steps." --changed-file "src/scanner/runner.py" --changed-file "tests/unit/test_runner.py" --no-auto-files
+```
+
 Run a single fixture-backed scan from the command line:
 
 ```powershell
