@@ -5,6 +5,8 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import pytest
+
 from src.scanner.models import MarketDataBundle, MarketDataSlice
 from src.services.browser_source import BrowserExtractionResult, BrowserSourceManager
 from src.services.config_loader import load_optional_yaml
@@ -163,34 +165,19 @@ def test_gui_api_replay_inserts_record_into_history_and_detail(tmp_path) -> None
         server.server_close()
 
 
-def test_gui_api_analyze_auto_flow_exposes_run_state_and_source_path(tmp_path) -> None:
+def test_gui_api_analyze_returns_paused_source_failure(tmp_path) -> None:
     server = _start_server(tmp_path)
     try:
-        with patch.object(TwelveDataMarketDataProvider, "get_symbol_data", return_value=_empty_bundle("Twelve Data unavailable.")):
-            with patch.object(YahooFinanceMarketDataProvider, "get_symbol_data", return_value=_complete_bundle(205.0)):
-                status, payload = _request_json(
-                    f"http://127.0.0.1:{server.server_port}/api/analyze",
-                    method="POST",
-                    body={"symbol": "SPY", "source_mode": "auto"},
-                )
-        assert status == 200
-        assert payload["record"]["symbol"] == "SPY"
-        assert payload["run_state"]["status"] == "success"
-        assert payload["run_state"]["source_mode_requested"] == "auto"
-        assert payload["run_state"]["source_used"] == "yahoo"
-        assert payload["run_state"]["source_class"] == "live_structured"
-        assert payload["run_state"]["fallback_chain"] == ["twelvedata"]
-
-        _, run_state = _request_json(f"http://127.0.0.1:{server.server_port}/api/run-state")
-        assert run_state["run_state"]["source_used"] == "yahoo"
-
-        scan_id = payload["record"]["scan_id"]
-        _, detail = _request_json(f"http://127.0.0.1:{server.server_port}/api/records/{scan_id}")
-        assert detail["display"]["source_path"]["requested"] == "auto"
-        assert detail["display"]["source_path"]["used"] == "yahoo"
-        assert detail["display"]["source_path"]["source_class"] == "live_structured"
-        assert detail["display"]["source_path"]["fallback_chain"] == ["twelvedata"]
-        assert detail["sections"]["detailed_analysis"]["timeframe_summary"]
+        status, payload = _request_json(
+            f"http://127.0.0.1:{server.server_port}/api/analyze",
+            method="POST",
+            body={"symbol": "SPY", "source_mode": "pending_source"},
+        )
+        assert status == 400
+        assert payload["error"].startswith("Live source integrations are temporarily disabled")
+        assert payload["run_state"]["status"] == "failed"
+        assert payload["run_state"]["source_mode_requested"] == "pending_source"
+        assert payload["run_state"]["source_used"] == "source_pending"
     finally:
         server.shutdown()
         server.server_close()
@@ -200,218 +187,54 @@ def test_gui_api_settings_expose_only_public_source_modes_and_ocr_status(tmp_pat
     server = _start_server(tmp_path)
     try:
         _, settings = _request_json(f"http://127.0.0.1:{server.server_port}/api/settings")
-        assert [mode["value"] for mode in settings["analyze_modes"]] == ["auto", "twelvedata", "webhook", "browser", "ocr"]
-        assert settings["ocr_status"]["enabled"] is False
-        assert settings["ocr_status"]["configured"] is False
-        assert settings["ocr_status"]["can_extract_live"] is False
-        assert settings["browser_status"]["enabled"] is True
-        assert settings["browser_status"]["supported_sources"]
-        assert settings["browser_status"]["current_provider"] == "stock_yahoo"
-        assert settings["source_settings"]["browser"]["provider"] == "yahoo"
-        assert settings["source_settings"]["browser"]["tradingview"]["chart_url_configured"] is False
+        assert [mode["value"] for mode in settings["analyze_modes"]] == ["pending_source"]
+        assert settings["source_program"]["active"] is False
+        assert settings["source_program"]["mode"] == "pending_source"
+        assert "tradingview_webhook" in settings["source_program"]["archived_integrations"]
         assert settings["source_settings"]["twelvedata"]["configured"] is False
-        assert settings["source_settings"]["source_preferences"]["default_mode"] == "auto"
+        assert settings["source_settings"]["program"]["active"] is False
     finally:
         server.shutdown()
         server.server_close()
 
 
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
 def test_gui_api_analyze_new_ticker_becomes_latest_record(tmp_path) -> None:
-    server = _start_server(tmp_path)
-    try:
-        with patch.object(TwelveDataMarketDataProvider, "get_symbol_data", return_value=_complete_bundle(301.0)):
-            first_status, first = _request_json(
-                f"http://127.0.0.1:{server.server_port}/api/analyze",
-                method="POST",
-                body={"symbol": "NVDA", "source_mode": "twelvedata"},
-            )
-            second_status, second = _request_json(
-                f"http://127.0.0.1:{server.server_port}/api/analyze",
-                method="POST",
-                body={"symbol": "QQQ", "source_mode": "twelvedata"},
-            )
-        assert first_status == 200
-        assert second_status == 200
-        assert first["record"]["scan_id"] != second["record"]["scan_id"]
-
-        _, history = _request_json(f"http://127.0.0.1:{server.server_port}/api/records")
-        assert history["records"][0]["symbol"] == "QQQ"
-        assert history["records"][0]["scan_id"] == second["record"]["scan_id"]
-
-        _, detail = _request_json(f"http://127.0.0.1:{server.server_port}/api/records/{second['record']['scan_id']}")
-        assert detail["record"]["symbol"] == "QQQ"
-    finally:
-        server.shutdown()
-        server.server_close()
+    pass
 
 
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
 def test_gui_api_analyze_returns_readable_failure_for_missing_webhook_source(tmp_path) -> None:
-    server = _start_server(tmp_path)
-    try:
-        status, payload = _request_json(
-            f"http://127.0.0.1:{server.server_port}/api/analyze",
-            method="POST",
-            body={"symbol": "AMD", "source_mode": "webhook"},
-        )
-        assert status == 400
-        assert payload["error"] == "No fresh webhook payload available for requested symbol."
-        assert payload["run_state"]["status"] == "failed"
-        assert payload["run_state"]["current_step"] == "Failed"
-    finally:
-        server.shutdown()
-        server.server_close()
+    pass
 
 
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
 def test_gui_api_analyze_ocr_returns_honest_unconfigured_failure(tmp_path) -> None:
-    server = _start_server(tmp_path)
-    try:
-        status, payload = _request_json(
-            f"http://127.0.0.1:{server.server_port}/api/analyze",
-            method="POST",
-            body={"symbol": "SPY", "source_mode": "ocr"},
-        )
-        assert status == 400
-        assert payload["error"] == "Screen-read fallback is disabled. Enable OCR in config/ocr_user.yaml to use it."
-        assert payload["ocr_status"]["enabled"] is False
-        assert payload["ocr_result"]["missing_fields"] == ["ticker", "timeframe", "price"]
-        assert payload["run_state"]["status"] == "failed"
-    finally:
-        server.shutdown()
-        server.server_close()
+    pass
 
 
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
 def test_gui_api_analyze_browser_returns_honest_partial_record(tmp_path) -> None:
-    server = _start_server(tmp_path)
-    try:
-        with patch("src.services.browser_source.BrowserSourceManager.extract_symbol") as extract:
-            extract.return_value = BrowserExtractionResult(
-                ok=True,
-                source_name="yahoo_quote_page",
-                page_url_attempted="https://finance.yahoo.com/quote/SPY",
-                symbol_requested="SPY",
-                symbol_detected="SPY",
-                timestamp_utc="2026-04-02T12:00:00Z",
-                latest_visible_price=523.11,
-                visible_timeframe=None,
-                fields_extracted=["symbol", "latest_visible_price"],
-                missing_fields=["1D.bars", "1H.bars", "5m.bars"],
-                warnings=["Browser extraction found visible quote data only. Higher timeframe context is missing."],
-                errors=[],
-                latency_ms=1200.0,
-                extraction_status="partial",
-                extraction_completeness="partial",
-                trust_classification="browser_partial",
-            )
-            status, payload = _request_json(
-                f"http://127.0.0.1:{server.server_port}/api/analyze",
-                method="POST",
-                body={"symbol": "SPY", "source_mode": "browser"},
-            )
-        assert status == 200
-        assert payload["record"]["symbol"] == "SPY"
-        assert payload["record"]["source_class_label"] == "Browser extracted"
-        assert payload["result"]["simple_summary"]["source_class_label"] == "Browser extracted"
-        assert payload["result"]["simple_summary"]["confidence_explanation"].startswith("Low confidence because browser extraction")
-
-        scan_id = payload["record"]["scan_id"]
-        _, detail = _request_json(f"http://127.0.0.1:{server.server_port}/api/records/{scan_id}")
-        assert detail["display"]["source_path"]["source_class_label"] == "Browser extracted"
-        assert detail["sections"]["detailed_analysis"]["source_path"]["used"] == "yahoo_quote_page"
-        assert detail["sections"]["detailed_analysis"]["source_path"]["coverage"] == "No timeframe data available"
-        assert detail["sections"]["advanced"]["metrics"]["browser_source_name"] == "yahoo_quote_page"
-    finally:
-        server.shutdown()
-        server.server_close()
+    pass
 
 
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
 def test_gui_api_analyze_browser_returns_readable_failure(tmp_path) -> None:
-    server = _start_server(tmp_path)
-    try:
-        with patch("src.services.browser_source.BrowserSourceManager.extract_symbol") as extract:
-            extract.return_value = BrowserExtractionResult(
-                ok=False,
-                source_name="yahoo_quote_page",
-                page_url_attempted="https://finance.yahoo.com/quote/SPY",
-                symbol_requested="SPY",
-                symbol_detected=None,
-                timestamp_utc=None,
-                latest_visible_price=None,
-                visible_timeframe=None,
-                fields_extracted=[],
-                missing_fields=["symbol", "price"],
-                warnings=["Expected quote heading was not visible."],
-                errors=["Supported page loaded, but no symbol data was found."],
-                latency_ms=800.0,
-                extraction_status="failed",
-                extraction_completeness="none",
-                trust_classification="browser_failed",
-            )
-            status, payload = _request_json(
-                f"http://127.0.0.1:{server.server_port}/api/analyze",
-                method="POST",
-                body={"symbol": "SPY", "source_mode": "browser"},
-            )
-        assert status == 400
-        assert payload["error"] == "Supported page loaded, but no symbol data was found."
-        assert payload["browser_result"]["source_name"] == "yahoo_quote_page"
-        assert payload["run_state"]["status"] == "failed"
-    finally:
-        server.shutdown()
-        server.server_close()
+    pass
 
 
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
 def test_gui_api_analyze_browser_runtime_failure_returns_json_instead_of_crashing(tmp_path) -> None:
-    class _FakeBrowser:
-        def new_page(self):
-            return object()
-
-        def close(self) -> None:
-            return None
-
-    class _FakeChromium:
-        def launch(self, *, headless: bool):
-            raise RuntimeError("Executable doesn't exist at C:\\ms-playwright\\chromium\\chrome.exe")
-
-    class _FakePlaywright:
-        chromium = _FakeChromium()
-
-    class _FakePlaywrightContext:
-        def __enter__(self):
-            return _FakePlaywright()
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    server = _start_server(tmp_path)
-    try:
-        with patch("src.services.browser_source._create_sync_playwright_context", return_value=_FakePlaywrightContext()):
-            with patch.object(
-                BrowserSourceManager,
-                "status_payload",
-                return_value={
-                    "enabled": True,
-                    "playwright_available": True,
-                    "supported_sources": [{"source_name": "yahoo_quote_page", "display_name": "Yahoo Finance quote page", "page_type": "stock_yahoo", "adapter_kind": "yahoo"}],
-                    "headless": True,
-                    "current_provider": "stock_yahoo",
-                    "tradingview": {"enabled": False, "chart_url_configured": False},
-                },
-            ):
-                status, payload = _request_json(
-                    f"http://127.0.0.1:{server.server_port}/api/analyze",
-                    method="POST",
-                    body={"symbol": "SPY", "source_mode": "browser"},
-                )
-        assert status == 400
-        assert payload["ok"] is False
-        assert payload["error"] == "Playwright browser executable is missing. Install browser binaries before using browser fallback."
-        assert payload["browser_result"]["source_name"] == "yahoo_quote_page"
-        assert payload["run_state"]["status"] == "failed"
-    finally:
-        server.shutdown()
-        server.server_close()
+    pass
 
 
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
 def test_gui_api_analyze_browser_accepts_tradingview_shaped_result(tmp_path) -> None:
     server = _start_server(tmp_path)
     try:
@@ -477,6 +300,7 @@ def test_gui_api_analyze_browser_accepts_tradingview_shaped_result(tmp_path) -> 
         server.server_close()
 
 
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
 def test_gui_api_auto_can_fall_back_to_browser_with_honest_source_path(tmp_path) -> None:
     server = _start_server(tmp_path)
     try:
@@ -524,6 +348,7 @@ def test_gui_api_auto_can_fall_back_to_browser_with_honest_source_path(tmp_path)
         server.server_close()
 
 
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
 def test_gui_api_can_test_twelvedata_connection_with_posted_key(tmp_path) -> None:
     server = _start_server(tmp_path)
     try:
@@ -542,6 +367,7 @@ def test_gui_api_can_test_twelvedata_connection_with_posted_key(tmp_path) -> Non
         server.server_close()
 
 
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
 def test_gui_api_analyze_webhook_reuses_only_fresh_webhook_records(tmp_path) -> None:
     server = _start_server(tmp_path)
     try:
@@ -565,6 +391,7 @@ def test_gui_api_analyze_webhook_reuses_only_fresh_webhook_records(tmp_path) -> 
         server.server_close()
 
 
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
 def test_gui_api_analyze_webhook_rejects_stale_webhook_records(tmp_path) -> None:
     server = _start_server(tmp_path)
     try:
@@ -586,6 +413,7 @@ def test_gui_api_analyze_webhook_rejects_stale_webhook_records(tmp_path) -> None
         server.server_close()
 
 
+@pytest.mark.skip(reason="Archived source-path integration coverage is intentionally paused until the new single source is chosen.")
 def test_gui_api_auto_does_not_reuse_replay_demo_records_as_fallback(tmp_path) -> None:
     class _FakeChromium:
         def launch(self, *, headless: bool):
@@ -737,30 +565,7 @@ def test_gui_api_settings_can_save_reset_and_load_demo(tmp_path) -> None:
             method="POST",
             body={
                 "public_webhook_url": "https://example.test/webhook",
-                "source_settings": {
-                    "twelvedata": {
-                        "api_key": "secret_test_key_1234",
-                    },
-                    "source_preferences": {
-                        "default_mode": "twelvedata",
-                        "webhook_fallback_enabled": False,
-                        "browser_fallback_enabled": False,
-                        "ocr_fallback_enabled": True,
-                    },
-                    "browser": {
-                        "provider": "tradingview",
-                        "headless": True,
-                        "persist_screenshots": True,
-                        "screenshot_dir": "out/browser_artifacts",
-                        "tradingview": {
-                            "enabled": True,
-                            "chart_url_template": "https://www.tradingview.com/chart/demo/?symbol={exchange_symbol}",
-                            "exchange_prefix": "AMEX",
-                            "page_load_timeout_ms": 16000,
-                            "settle_wait_ms": 2600,
-                        },
-                    },
-                },
+                "source_settings": {},
                 "editable_settings": {
                     "trend_filter": {
                         "minimum_trend_strength_score": "72",
@@ -794,21 +599,14 @@ def test_gui_api_settings_can_save_reset_and_load_demo(tmp_path) -> None:
         assert saved["ok"] is True
         assert saved["settings"]["public_webhook_url"] == "https://example.test/webhook"
         assert saved["settings"]["editable_settings"]["trend_filter"]["minimum_trend_strength_score"] == 72.0
-        assert saved["settings"]["source_settings"]["twelvedata"]["configured"] is True
-        assert saved["settings"]["source_settings"]["twelvedata"]["masked_api_key"].endswith("1234")
-        assert saved["settings"]["source_settings"]["source_preferences"]["default_mode"] == "twelvedata"
-        assert saved["settings"]["source_settings"]["source_preferences"]["webhook_fallback_enabled"] is False
-        assert saved["settings"]["source_settings"]["source_preferences"]["browser_fallback_enabled"] is False
-        assert saved["settings"]["source_settings"]["browser"]["provider"] == "tradingview"
-        assert saved["settings"]["source_settings"]["browser"]["tradingview"]["chart_url_configured"] is True
+        assert saved["settings"]["source_program"]["active"] is False
+        assert saved["settings"]["source_settings"]["program"]["active"] is False
 
         source_settings_file = tmp_path / "gui_sources.yaml"
         stored_source_settings = load_optional_yaml(source_settings_file)
-        assert stored_source_settings["twelvedata"]["api_key"] == "secret_test_key_1234"
-        assert stored_source_settings["source_preferences"]["default_mode"] == "twelvedata"
-        assert stored_source_settings["source_preferences"]["browser_fallback_enabled"] is False
-        assert stored_source_settings["browser"]["provider"] == "tradingview"
-        assert stored_source_settings["browser"]["tradingview"]["exchange_prefix"] == "AMEX"
+        assert stored_source_settings["twelvedata"]["api_key"] == ""
+        assert stored_source_settings["source_preferences"]["default_mode"] == "auto"
+        assert stored_source_settings["browser"]["provider"] == "yahoo"
 
         _, demo = _request_json(f"http://127.0.0.1:{server.server_port}/api/settings/load-demo", method="POST")
         assert demo["ok"] is True

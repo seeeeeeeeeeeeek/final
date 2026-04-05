@@ -6,7 +6,6 @@ _NAV_ITEMS = (
     ("live", "Live Analysis"),
     ("detail", "Analysis Detail"),
     ("settings", "Strategy Settings"),
-    ("tradingview", "TradingView Setup"),
     ("history", "History"),
     ("diagnostics", "Diagnostics"),
 )
@@ -215,7 +214,7 @@ def build_index_html() -> str:
   <div class="app">
     <aside class="sidebar">
       <div class="brand">stock<span>nogs</span></div>
-      <div class="tagline">A local TradingView companion for live chart analysis, webhook-driven analysis, and screen-read fallback.</div>
+      <div class="tagline">A local breakout-analysis workspace with the source layer temporarily narrowed while the next single source is chosen.</div>
       <div class="sidebar-label">Workspace</div>
       <nav class="nav">""" + _nav_markup() + """</nav>
     </aside>
@@ -230,23 +229,21 @@ def build_index_html() -> str:
         <div class="grid two-col">
           <div class="card">
             <h2>Analyze Ticker</h2>
-            <div class="helper-copy">Enter a ticker, choose the source mode, and run a new analysis without refreshing the app.</div>
+            <div class="helper-copy">The source layer is temporarily disabled while the app is narrowed to one future source. You can still inspect saved records and keep the strategy settings in place.</div>
             <div class="settings-grid" style="margin-top:12px;">
               <div><label>Ticker</label><input id="analyze-symbol" placeholder="NVDA"></div>
-              <div><label>Source mode</label><select id="analyze-source-mode"></select></div>
+              <div><label>Source program</label><select id="analyze-source-mode"></select></div>
             </div>
             <div class="button-row">
               <button class="action" id="analyze-submit">Analyze</button>
               <button class="ghost" id="open-latest-result">Open latest result</button>
               <button class="ghost" id="clear-current-selection">Clear current selection</button>
             </div>
-            <div class="footer-note">Auto tries live data first, then a fresh TradingView alert, then TRADINGVIEW LIVE browser context, then screen-read fallback if configured.</div>
-            <div id="browser-status-panel" class="summary-stack" style="margin-top:14px;"></div>
-            <div id="ocr-status-panel" class="summary-stack" style="margin-top:14px;"></div>
+            <div id="source-program-panel" class="summary-stack" style="margin-top:14px;"></div>
           </div>
           <div class="card status-panel">
             <h2>Run Status</h2>
-            <div class="helper-copy">See which source path the app is trying, what stage it is in, and whether higher timeframe context is missing.</div>
+            <div class="helper-copy">See whether analysis is idle, blocked on the missing source decision, or completed from existing saved records.</div>
             <div id="run-status-panel" class="summary-stack"></div>
           </div>
         </div>
@@ -266,10 +263,6 @@ def build_index_html() -> str:
           </div>
           <div id="settings-result" class="footer-note">Local overrides are stored separately from the core defaults.</div>
         </div>
-      </section>
-      <section id="tradingview" class="page">
-        <div class="page-header"><div><h1>TradingView Setup</h1><p>Use this page when you are ready to connect a fresh TradingView alert to the local receiver.</p></div></div>
-        <div id="tradingview-panel" class="grid two-col"></div>
       </section>
       <section id="history" class="page">
         <div class="page-header"><div><h1>History</h1><p>Browse saved records across sessions. Filter by symbol, setup status, or a simple date window.</p></div></div>
@@ -336,22 +329,10 @@ def build_index_html() -> str:
       const stageItems = runState.completed_steps && runState.completed_steps.length ? runState.completed_steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('') : '<li>Waiting to start</li>';
       return `<div class="summary-line"><strong>Status</strong><span>${escapeHtml(runState.status || 'idle')}</span></div><div class="summary-line"><strong>Ticker</strong><span>${escapeHtml(runState.current_ticker || 'None')}</span></div><div class="summary-line"><strong>Requested source</strong><span>${escapeHtml(runState.source_mode_requested || 'Not selected')}</span></div><div class="summary-line"><strong>Current step</strong><span>${escapeHtml(runState.current_step || 'Waiting to start')}</span></div><div class="summary-line"><strong>Used source</strong><span>${escapeHtml(runState.source_used || 'Not resolved')}</span></div><div class="summary-line"><strong>Source class</strong><span>${escapeHtml(runState.source_class_label || 'Unavailable')}</span></div><div class="summary-line"><strong>Coverage</strong><span>${escapeHtml(runState.coverage_text || 'Not available yet')}</span></div><div class="summary-line"><strong>Missing context</strong><span>${escapeHtml((runState.missing_context || []).join(', ') || 'None')}</span></div><div class="summary-line"><strong>Fallback chain</strong><span>${escapeHtml(fallbackText)}</span></div>${runState.failure_reason ? `<div class="summary-line"><strong>Failure</strong><span>${escapeHtml(runState.failure_reason)}</span></div>` : ''}<div class="helper-copy">Completed stages</div><ul class="bullet-list">${stageItems}</ul><div class="helper-copy">Warnings</div><ul class="bullet-list">${warningItems}</ul>`;
     }
-    function renderOcrStatus(status) {
-      const ocr = status || {};
-      const warnings = [];
-      if (!ocr.enabled) { warnings.push('Screen-read fallback is currently disabled.'); }
-      if (ocr.enabled && !ocr.configured) { warnings.push('OCR is enabled but not configured yet.'); }
-      if (ocr.configured && !ocr.engine_available && ocr.capture_source !== 'Manual OCR text hint') { warnings.push('OCR engine is not installed for image extraction.'); }
-      return `<div class="section-title">Screen Read Fallback</div><div class="helper-copy">Fallback only. It can read visible chart text when structured live data is unavailable.</div><div class="summary-line"><strong>Status</strong><span>${escapeHtml(ocr.configured ? 'Configured' : 'Not configured')}</span></div><div class="summary-line"><strong>Capture source</strong><span>${escapeHtml(ocr.capture_source || 'Not configured')}</span></div><div class="summary-line"><strong>Can extract now</strong><span>${escapeHtml(ocr.can_extract_live ? 'Yes' : 'No')}</span></div><div class="summary-line"><strong>Config path</strong><span>${escapeHtml(ocr.config_path || 'Not available')}</span></div>${warnings.length ? `<div class="helper-copy">${warnings.map((warning) => escapeHtml(warning)).join(' ')}</div>` : '<div class="helper-copy">OCR fallback is ready to attempt visible ticker, timeframe, and price extraction only.</div>'}`;
-    }
-    function renderBrowserStatus(status) {
-      const browser = status || {};
-      const supported = browser.supported_sources || [];
-      const supportedText = supported.length ? supported.map((item) => item.display_name).join(', ') : 'No supported pages';
-      const warnings = [];
-      const tradingview = browser.tradingview || {};
-      if (!browser.playwright_available) { warnings.push('Playwright is not installed, so browser fallback cannot run yet.'); }
-      return `<div class="section-title">TRADINGVIEW LIVE</div><div class="helper-copy">Bounded fallback only. This mode can use configured TradingView live chart pages and still remains partial browser context only. If Yahoo is the current provider, the app will say so directly instead of implying TradingView is active.</div><div class="summary-line"><strong>Status</strong><span>${escapeHtml(browser.playwright_available ? 'Available' : 'Unavailable')}</span></div><div class="summary-line"><strong>Current provider</strong><span>${escapeHtml(browser.current_provider_label || browser.current_provider || 'Yahoo Finance quote page')}</span></div><div class="summary-line"><strong>Supported pages</strong><span>${escapeHtml(supportedText)}</span></div><div class="summary-line"><strong>Headless</strong><span>${escapeHtml(browser.headless ? 'Yes' : 'No')}</span></div><div class="summary-line"><strong>TradingView configured</strong><span>${escapeHtml(tradingview.chart_url_configured ? 'Yes' : 'No')}</span></div>${warnings.length ? `<div class="helper-copy">${warnings.map((warning) => escapeHtml(warning)).join(' ')}</div>` : '<div class="helper-copy">TRADINGVIEW LIVE currently supports configured TradingView live chart pages and, when selected as provider, can also fall back to Yahoo quote extraction without fabricating missing timeframe context.</div>'}`;
+    function renderSourceProgramStatus(settings) {
+      const program = settings?.source_program || settings?.source_settings?.program || {};
+      const archived = program.archived_integrations || [];
+      return `<div class="section-title">Source Program</div><div class="helper-copy">${escapeHtml(program.message || 'No active source selected yet.')}</div><div class="summary-line"><strong>Status</strong><span>${escapeHtml(program.active ? 'Active' : 'Paused')}</span></div><div class="summary-line"><strong>Current mode</strong><span>${escapeHtml(program.label || 'Source Pending')}</span></div><div class="summary-line"><strong>Archived integrations</strong><span>${escapeHtml(archived.join(', ') || 'None')}</span></div><div class="helper-copy">The previous integrations remain in the codebase but are intentionally hidden from the current app flow.</div>`;
     }
     function kvRows(entries) {
       if (!entries || !Object.keys(entries).length) { return '<div class="muted small">Not available yet.</div>'; }
@@ -361,10 +342,6 @@ def build_index_html() -> str:
     async function loadRunState() { return fetchJson('/api/run-state'); }
     function buildSettingsFields(settings) {
       const editable = settings.editable_settings;
-      const sourceSettings = settings.source_settings || {};
-      const twelvedata = sourceSettings.twelvedata || {};
-      const preferences = sourceSettings.source_preferences || {};
-      const browser = sourceSettings.browser || {};
       const groups = [
         ['Trend Filter', 'trend_filter', [['minimum_trend_strength_score', 'Minimum trend strength'], ['minimum_slope_pct', 'Minimum slope %']]],
         ['Compression', 'compression', [['maximum_pullback_depth_pct', 'Max pullback depth %'], ['minimum_range_contraction_pct', 'Min range contraction %'], ['minimum_volatility_contraction_pct', 'Min volatility contraction %']]],
@@ -373,17 +350,14 @@ def build_index_html() -> str:
         ['Scoring Weights', 'scoring', [['trend_alignment', 'Trend alignment weight'], ['squeeze_quality', 'Squeeze quality weight'], ['breakout_impulse', 'Breakout impulse weight'], ['path_quality', 'Path quality weight'], ['trap_risk_penalty', 'Trap-risk penalty weight']]],
       ];
         return groups.map(([title, key, fields]) => `<div class="card"><h3>${title}</h3>${fields.map(([fieldKey, label]) => `<div style="margin-top:10px;"><label>${label}</label><input data-settings-group="${key}" data-settings-key="${fieldKey}" value="${editable[key][fieldKey] ?? ''}"></div>`).join('')}</div>`).join('')
-          + `<div class="card"><h3>Live Data Source</h3><div class="small muted">Use your own Twelve Data API key to unlock structured live market data inside the app.</div><div style="margin-top:10px;"><label>Twelve Data API key</label><input id="settings-twelvedata-api-key" type="password" value="" placeholder="${escapeHtml(twelvedata.configured ? (twelvedata.masked_api_key || 'Saved locally') : 'Enter your Twelve Data API key')}"></div><div class="summary-stack"><div class="summary-line"><strong>Saved key</strong><span>${escapeHtml(twelvedata.configured ? (twelvedata.masked_api_key || 'Saved') : 'Not saved')}</span></div><div class="summary-line"><strong>Default analyze mode</strong><span>${escapeHtml(preferences.default_mode || 'auto')}</span></div></div><div class="button-row"><button class="ghost" id="settings-test-twelvedata">Test connection</button><button class="ghost" id="settings-clear-twelvedata">Clear saved key</button></div><div class="helper-copy">The key is stored locally on this machine only and is not shown back in full after save.</div></div>`
-          + `<div class="card"><h3>Source Preferences</h3><div class="small muted">Keep Auto understandable: live data first, then fresh TradingView alert reuse, then TRADINGVIEW LIVE browser context, then screen-read fallback if enabled.</div><div style="margin-top:10px;"><label>Default source mode</label><select id="settings-default-source-mode"><option value="auto" ${preferences.default_mode === 'auto' ? 'selected' : ''}>Auto</option><option value="twelvedata" ${preferences.default_mode === 'twelvedata' ? 'selected' : ''}>Twelve Data</option><option value="webhook" ${preferences.default_mode === 'webhook' ? 'selected' : ''}>TradingView webhook</option><option value="browser" ${preferences.default_mode === 'browser' ? 'selected' : ''}>TRADINGVIEW LIVE</option><option value="ocr" ${preferences.default_mode === 'ocr' ? 'selected' : ''}>Screen read fallback</option></select></div><div style="margin-top:10px;"><label><input id="settings-webhook-fallback-enabled" type="checkbox" style="width:auto;" ${preferences.webhook_fallback_enabled !== false ? 'checked' : ''}> Allow fresh TradingView alert fallback</label></div><div style="margin-top:10px;"><label><input id="settings-browser-fallback-enabled" type="checkbox" style="width:auto;" ${preferences.browser_fallback_enabled !== false ? 'checked' : ''}> Allow TRADINGVIEW LIVE fallback</label></div><div style="margin-top:10px;"><label><input id="settings-ocr-fallback-enabled" type="checkbox" style="width:auto;" ${preferences.ocr_fallback_enabled !== false ? 'checked' : ''}> Allow screen-read fallback</label></div><div class="footer-note">Auto order: ${(preferences.auto_priority || ['Twelve Data', 'Yahoo fallback', 'Fresh TradingView webhook', 'TRADINGVIEW LIVE fallback', 'Screen read fallback']).map((item) => escapeHtml(item)).join(' -> ')}</div></div>`
-          + `<div class="card"><h3>TRADINGVIEW LIVE Browser Settings</h3><div class="small muted">Choose which browser provider is active. If you want TradingView browser extraction, save the chart URL template here first.</div><div style="margin-top:10px;"><label>Browser provider</label><select id="settings-browser-provider"><option value="yahoo" ${browser.provider === 'yahoo' ? 'selected' : ''}>Yahoo Finance quote page</option><option value="tradingview" ${browser.provider === 'tradingview' ? 'selected' : ''}>TradingView live chart page</option></select></div><div style="margin-top:10px;"><label><input id="settings-browser-headless" type="checkbox" style="width:auto;" ${browser.headless !== false ? 'checked' : ''}> Run browser headless</label></div><div style="margin-top:10px;"><label><input id="settings-browser-persist-screenshots" type="checkbox" style="width:auto;" ${browser.persist_screenshots !== false ? 'checked' : ''}> Save browser screenshots</label></div><div style="margin-top:10px;"><label>Screenshot directory</label><input id="settings-browser-screenshot-dir" value="${escapeHtml(browser.screenshot_dir || 'out/browser_artifacts')}"></div><div style="margin-top:16px;"><label><input id="settings-browser-tradingview-enabled" type="checkbox" style="width:auto;" ${browser.tradingview?.enabled ? 'checked' : ''}> Enable TradingView browser extraction</label></div><div style="margin-top:10px;"><label>TradingView chart URL template</label><input id="settings-browser-tradingview-chart-url-template" value="${escapeHtml(browser.tradingview?.chart_url_template || '')}" placeholder="https://www.tradingview.com/chart/yourChartId/?symbol={exchange_symbol}"></div><div style="margin-top:10px;"><label>Exchange prefix</label><input id="settings-browser-tradingview-exchange-prefix" value="${escapeHtml(browser.tradingview?.exchange_prefix || '')}" placeholder="AMEX"></div><div class="settings-grid" style="margin-top:10px;"><div><label>Page load timeout (ms)</label><input id="settings-browser-tradingview-page-load-timeout-ms" value="${escapeHtml(String(browser.tradingview?.page_load_timeout_ms || 15000))}"></div><div><label>Settle wait (ms)</label><input id="settings-browser-tradingview-settle-wait-ms" value="${escapeHtml(String(browser.tradingview?.settle_wait_ms || 2500))}"></div></div><div class="helper-copy">After you click Save, the Live Analysis status panel should show Current provider = TradingView live chart page and TradingView configured = Yes.</div></div>`
-          + `<div class="card"><h3>Webhook Visibility</h3><div class="small muted">Use a public tunnel URL here if you want the setup page to show a copy-ready TradingView endpoint.</div><div style="margin-top:10px;"><label>Public webhook URL</label><input id="settings-public-webhook-url" value="${settings.public_webhook_url ?? ''}" placeholder="https://your-public-endpoint.example/webhook"></div><div class="footer-note">Override file: ${escapeHtml(settings.override_path || 'Not configured')}</div></div>`;
+          + `<div class="card"><h3>Source Layer</h3><div class="small muted">The old multi-source controls are hidden from the app while you decide the single source the program should use next.</div><div class="summary-stack"><div class="summary-line"><strong>Status</strong><span>Paused</span></div><div class="summary-line"><strong>Current program</strong><span>${escapeHtml(settings.source_program?.label || 'Source Pending')}</span></div></div><div style="margin-top:10px;"><label>Public webhook URL</label><input id="settings-public-webhook-url" value="${settings.public_webhook_url ?? ''}" placeholder="https://your-public-endpoint.example/webhook"></div><div class="helper-copy">Only the public URL field remains visible because it is harmless to keep around while source decisions are deferred.</div><div class="footer-note">Override file: ${escapeHtml(settings.override_path || 'Not configured')}</div></div>`;
     }
     function renderAnalyzeModeOptions(settings) {
       const select = document.getElementById('analyze-source-mode');
       if (!select) { return; }
       const modes = settings.analyze_modes || [];
       select.innerHTML = modes.map((mode) => `<option value="${escapeHtml(mode.value)}" ${mode.disabled ? 'disabled' : ''}>${escapeHtml(mode.label)}</option>`).join('');
-      select.value = settings.source_settings?.source_preferences?.default_mode || 'auto';
+      select.value = settings.source_program?.mode || 'pending_source';
     }
     function currentSettingsPayload() {
       const editable = { trend_filter: {}, compression: {}, breakout_trigger: {}, trap_risk: {}, scoring: {} };
@@ -392,31 +366,8 @@ def build_index_html() -> str:
         editable_settings: editable,
         public_webhook_url: document.getElementById('settings-public-webhook-url')?.value || null,
         clear_twelvedata_key: clearTwelveDataRequested,
-        source_settings: {
-          twelvedata: {
-            api_key: document.getElementById('settings-twelvedata-api-key')?.value || '',
-          },
-            source_preferences: {
-              default_mode: document.getElementById('settings-default-source-mode')?.value || 'auto',
-              webhook_fallback_enabled: !!document.getElementById('settings-webhook-fallback-enabled')?.checked,
-              browser_fallback_enabled: !!document.getElementById('settings-browser-fallback-enabled')?.checked,
-              ocr_fallback_enabled: !!document.getElementById('settings-ocr-fallback-enabled')?.checked,
-            },
-            browser: {
-              provider: document.getElementById('settings-browser-provider')?.value || 'yahoo',
-              headless: !!document.getElementById('settings-browser-headless')?.checked,
-              persist_screenshots: !!document.getElementById('settings-browser-persist-screenshots')?.checked,
-              screenshot_dir: document.getElementById('settings-browser-screenshot-dir')?.value || 'out/browser_artifacts',
-              tradingview: {
-                enabled: !!document.getElementById('settings-browser-tradingview-enabled')?.checked,
-                chart_url_template: document.getElementById('settings-browser-tradingview-chart-url-template')?.value || '',
-                exchange_prefix: document.getElementById('settings-browser-tradingview-exchange-prefix')?.value || '',
-                page_load_timeout_ms: Number(document.getElementById('settings-browser-tradingview-page-load-timeout-ms')?.value || 15000),
-                settle_wait_ms: Number(document.getElementById('settings-browser-tradingview-settle-wait-ms')?.value || 2500),
-              },
-            },
-          },
-        };
+        source_settings: {},
+      };
       }
     async function renderHome() {
       const [health, settings, recentPayload] = await Promise.all([fetchJson('/api/health'), settingsCache ? Promise.resolve(settingsCache) : loadSettings(), fetchJson('/api/recent')]);
@@ -425,19 +376,19 @@ def build_index_html() -> str:
       const records = recentPayload.records || [];
       const homeBody = document.getElementById('home-body');
       if (!records.length) {
-        homeBody.innerHTML = `<div class="hero"><h2>No live records yet</h2><p class="muted">This workspace is ready, but it has not received a live market record yet. Start with Live Analysis or connect TradingView webhook delivery.</p><div class="button-row"><button class="action" id="home-open-live">Open Live Analysis</button><button class="ghost" id="home-open-tv">View TradingView setup</button></div></div>`;
+        homeBody.innerHTML = `<div class="hero"><h2>No live records yet</h2><p class="muted">This workspace is ready, but live source integrations are paused until the next single source is chosen. Start with Live Analysis if you want to see the current source status, or use saved records if any exist later.</p><div class="button-row"><button class="action" id="home-open-live">Open Live Analysis</button><button class="ghost" id="home-open-settings">Open Strategy Settings</button></div></div>`;
         document.getElementById('home-open-live').onclick = () => setPage('live');
-        document.getElementById('home-open-tv').onclick = () => setPage('tradingview');
+        document.getElementById('home-open-settings').onclick = () => setPage('settings');
         return;
       }
-      homeBody.innerHTML = `<div class="grid two-col"><div class="card"><h2>Latest analyses</h2><div class="grid">${records.slice(0, 4).map((record) => renderCompactCard(record)).join('')}</div></div><div class="card"><h2>Next step</h2><div class="helper-copy">If you want a quick answer, start with the setup status, direction, confidence, and target. Open Analysis Detail when you want the fuller reasoning behind the call.</div><ol class="helper-list"><li>Analyze a live ticker.</li><li>Check whether the setup is usable now.</li><li>Open Analysis Detail for the action card and timeframe story.</li><li>Use TradingView Setup when you are ready for fresh alerts.</li></ol></div></div>`;
+      homeBody.innerHTML = `<div class="grid two-col"><div class="card"><h2>Latest analyses</h2><div class="grid">${records.slice(0, 4).map((record) => renderCompactCard(record)).join('')}</div></div><div class="card"><h2>Next step</h2><div class="helper-copy">The source layer is paused, so the useful next step is to review saved records and keep the strategy thresholds clean while the replacement source is chosen.</div><ol class="helper-list"><li>Open Analysis Detail for the best saved record.</li><li>Check whether the setup is usable now.</li><li>Review the timeframe story and action card.</li><li>Choose the next single live source before resuming fresh analysis.</li></ol></div></div>`;
       document.querySelectorAll('[data-scan-id]').forEach((element) => { element.onclick = () => loadDetail(element.dataset.scanId); });
     }
     async function renderLiveSignals() {
       const payload = await fetchJson('/api/recent');
       const records = payload.records || [];
       const container = document.getElementById('live-signals');
-      if (!records.length) { container.innerHTML = '<div class="empty-state">No live or fresh webhook results yet. Run Analyze Ticker to fetch one.</div>'; return; }
+      if (!records.length) { container.innerHTML = '<div class="empty-state">No saved analysis records yet. Live source integrations are paused until the next single source is chosen.</div>'; return; }
       container.innerHTML = records.map((record) => renderCompactCard(record)).join('');
       document.querySelectorAll('#live-signals [data-scan-id]').forEach((element) => { element.onclick = () => loadDetail(element.dataset.scanId); });
     }
@@ -496,17 +447,6 @@ def build_index_html() -> str:
       document.querySelectorAll('#history-table [data-scan-id]').forEach((row) => { row.onclick = (event) => { if (event.target.closest('[data-delete-scan-id]')) { return; } loadDetail(row.dataset.scanId); }; });
       document.querySelectorAll('#history-table [data-delete-scan-id]').forEach((button) => { button.onclick = async (event) => { event.stopPropagation(); await deleteRecord(button.dataset.deleteScanId); }; });
     }
-    async function renderTradingViewSetup() {
-      const settings = settingsCache || await loadSettings();
-      const panel = document.getElementById('tradingview-panel');
-      panel.innerHTML = `<div class="card"><h2>Webhook endpoint</h2><div class="small muted">Paste a public webhook URL into TradingView. TradingView cannot reach 127.0.0.1 directly, so use a public tunnel URL for live alerts.</div><div style="margin-top:14px;"><label>Local webhook URL</label><div class="row"><input id="local-webhook-url" value="${escapeHtml(settings.webhook_endpoint)}" readonly><button class="ghost" data-copy-target="local-webhook-url">Copy</button></div></div><div style="margin-top:14px;"><label>Public / tunnel webhook URL</label><div class="row"><input id="public-webhook-url-display" value="${escapeHtml(settings.public_webhook_url || '')}" placeholder="https://your-public-endpoint.example/webhook" readonly><button class="ghost" data-copy-target="public-webhook-url-display">Copy</button></div></div><div class="footer-note">If you want this field filled in, save a public URL in Strategy Settings.</div></div><div class="card"><h2>Setup steps</h2><ol class="helper-list"><li>Start the GUI locally.</li><li>Open the Pine template in TradingView and add it to your chart.</li><li>Create a TradingView alert on the indicator.</li><li>Enable webhook delivery and paste your public webhook URL.</li><li>Use the alert JSON body shown below.</li></ol><div style="margin-top:14px;"><div class="section-title">Minimal webhook JSON</div><div class="mono">${escapeHtml(JSON.stringify(settings.payload_example, null, 2))}</div></div></div>`;
-      document.querySelectorAll('[data-copy-target]').forEach((button) => {
-        button.onclick = async () => {
-          const target = document.getElementById(button.dataset.copyTarget);
-          try { await navigator.clipboard.writeText(target.value); } catch (error) { console.error(error); }
-        };
-      });
-    }
     async function renderDiagnostics() {
       const payload = await fetchJson('/api/diagnostics');
       const panel = document.getElementById('diagnostics-panel');
@@ -517,14 +457,8 @@ def build_index_html() -> str:
       clearTwelveDataRequested = false;
       document.getElementById('settings-form').innerHTML = buildSettingsFields(settings);
       renderAnalyzeModeOptions(settings);
-      const testButton = document.getElementById('settings-test-twelvedata');
-      if (testButton) { testButton.onclick = testTwelveDataConnection; }
-      const clearButton = document.getElementById('settings-clear-twelvedata');
-      if (clearButton) { clearButton.onclick = clearTwelveDataKey; }
-      const ocrPanel = document.getElementById('ocr-status-panel');
-      if (ocrPanel) { ocrPanel.innerHTML = renderOcrStatus(settings.ocr_status || {}); }
-      const browserPanel = document.getElementById('browser-status-panel');
-      if (browserPanel) { browserPanel.innerHTML = renderBrowserStatus(settings.browser_status || {}); }
+      const sourceProgramPanel = document.getElementById('source-program-panel');
+      if (sourceProgramPanel) { sourceProgramPanel.innerHTML = renderSourceProgramStatus(settings); }
     }
     function clearCurrentSelection() {
       selectedScanId = null;
@@ -599,26 +533,6 @@ def build_index_html() -> str:
       document.getElementById('settings-result').textContent = payload.message;
       await refreshAll();
     }
-    async function testTwelveDataConnection() {
-      const result = document.getElementById('settings-result');
-      try {
-        const apiKey = document.getElementById('settings-twelvedata-api-key')?.value || '';
-        const payload = await fetchJson('/api/source-settings/test-twelvedata', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ api_key: apiKey }),
-        });
-        result.textContent = payload.message;
-      } catch (error) {
-        result.textContent = String(error.message || error);
-      }
-    }
-    function clearTwelveDataKey() {
-      const input = document.getElementById('settings-twelvedata-api-key');
-      if (input) { input.value = ''; }
-      clearTwelveDataRequested = true;
-      document.getElementById('settings-result').textContent = 'The saved Twelve Data key will be cleared when you click Save.';
-    }
     async function resetSettings() {
       const payload = await fetchJson('/api/settings/reset', { method: 'POST' });
       settingsCache = payload.settings;
@@ -633,7 +547,7 @@ def build_index_html() -> str:
     }
     async function refreshAll() {
       settingsCache = await loadSettings();
-      await Promise.all([renderHome(), renderLiveSignals(), renderSettings(), renderTradingViewSetup(), renderHistory(), renderDiagnostics(), renderRunStatus()]);
+      await Promise.all([renderHome(), renderLiveSignals(), renderSettings(), renderHistory(), renderDiagnostics(), renderRunStatus()]);
       if (selectedScanId) { try { await loadDetail(selectedScanId); } catch (error) { console.error(error); } }
     }
     document.querySelectorAll('.nav button').forEach((button) => { button.onclick = () => setPage(button.dataset.page); });

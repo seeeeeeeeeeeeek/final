@@ -34,6 +34,9 @@ from src.utils.validation import validate_scan_record
 
 _TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 _FRESH_WEBHOOK_MAX_AGE_SECONDS = 15 * 60
+_SOURCE_PROGRAM_MODE = "pending_source"
+_SOURCE_PROGRAM_LABEL = "Source Pending"
+_SOURCE_PROGRAM_MESSAGE = "Live source integrations are temporarily disabled while the app is narrowed to one source. Choose the replacement source before running live analysis."
 
 
 def _failed_run_state(source_mode: str, failure_reason: str) -> dict[str, Any]:
@@ -416,6 +419,12 @@ class GUIApplication:
                     "settle_wait_ms": int(tradingview.get("settle_wait_ms", 2500) or 2500),
                 },
             },
+            "program": {
+                "active": False,
+                "mode": _SOURCE_PROGRAM_MODE,
+                "message": _SOURCE_PROGRAM_MESSAGE,
+                "archived_integrations": ["twelvedata", "yahoo", "tradingview_webhook", "browser", "ocr"],
+            },
         }
 
     def test_twelvedata_connection(self, payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
@@ -756,7 +765,7 @@ class GUIApplication:
 
     def analyze_symbol(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         symbol = str(payload.get("symbol", "")).strip().upper()
-        source_mode = str(payload.get("source_mode", "auto")).strip().lower()
+        source_mode = str(payload.get("source_mode", _SOURCE_PROGRAM_MODE)).strip().lower()
         if not symbol or not _TICKER_RE.fullmatch(symbol):
             reason = "Invalid ticker format."
             self.state.start_run(symbol=symbol or "", source_mode=source_mode)
@@ -764,13 +773,14 @@ class GUIApplication:
             return 400, {"ok": False, "error": reason, "run_state": self.state.run_state_payload()}
 
         self.state.start_run(symbol=symbol, source_mode=source_mode)
-        supported_modes = {"auto", "twelvedata", "webhook", "browser", "ocr"}
-        if source_mode not in supported_modes:
-            reason = f"Unsupported source mode: {source_mode}"
-            self.state.fail_run(reason, source_class="unavailable")
-            return 400, {"ok": False, "error": reason, "run_state": self.state.run_state_payload()}
-
-        return self._run_live_scan(symbol=symbol, source_mode=source_mode)
+        reason = _SOURCE_PROGRAM_MESSAGE
+        self.state.fail_run(
+            reason,
+            source_used="source_pending",
+            source_class="unavailable",
+            mode_kind="live",
+        )
+        return 400, {"ok": False, "error": reason, "run_state": self.state.run_state_payload()}
 
     def settings_response(self, *, server_port: int) -> dict[str, Any]:
         payload = self.state.settings_payload(
@@ -801,12 +811,15 @@ class GUIApplication:
         payload["browser_status"] = self.browser_service.status_payload()
         payload["source_settings"] = self._masked_source_settings_payload()
         payload["analyze_modes"] = [
-            {"value": "auto", "label": "Auto"},
-            {"value": "twelvedata", "label": "Twelve Data"},
-            {"value": "webhook", "label": "TradingView webhook"},
-            {"value": "browser", "label": "TRADINGVIEW LIVE"},
-            {"value": "ocr", "label": "Screen read fallback"},
+            {"value": _SOURCE_PROGRAM_MODE, "label": _SOURCE_PROGRAM_LABEL},
         ]
+        payload["source_program"] = {
+            "mode": _SOURCE_PROGRAM_MODE,
+            "label": _SOURCE_PROGRAM_LABEL,
+            "active": False,
+            "message": _SOURCE_PROGRAM_MESSAGE,
+            "archived_integrations": ["twelvedata", "yahoo", "tradingview_webhook", "browser", "ocr"],
+        }
         return payload
 
     def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:

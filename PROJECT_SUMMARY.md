@@ -484,39 +484,38 @@ As of the current checkpoint, the project now has:
 - bounded browser extraction fallback
 - bounded TradingView browser extraction
 
-## 15. Current Source Hierarchy in Practice
+## 15. Current Source Program State
 
-The intended product hierarchy remains:
+The app no longer exposes the previous multi-source hierarchy in the active GUI workflow.
 
-1. structured live market data
-2. fresh TradingView webhook events
-3. browser extraction fallback
-4. OCR / screen-read fallback
-5. clear failure if usable data is unavailable
+The previous source paths have been intentionally archived from the product surface:
 
-In practice today:
+- Twelve Data structured live
+- Yahoo structured live / quote fallback
+- TradingView webhook reuse
+- browser extraction
+- OCR / screen-read fallback
 
-- structured live uses Twelve Data first and Yahoo as an additional structured provider path
-- webhook remains event-driven fresh record reuse only
-- browser can use Yahoo quote extraction or configured TradingView chart extraction
-- OCR remains bounded visible-text fallback only
+This was done to keep the product narrow while a single replacement source is chosen.
+
+Important boundary:
+
+- the code for those integrations still exists in the repo
+- the app UI no longer presents them as active choices
+- the analyze endpoint now fails clearly instead of silently trying old source paths
 
 ## 16. What Is Working Right Now
 
 As of now, the project can legitimately do all of the following:
 
-- run deterministic scan analysis
-- ingest TradingView webhook payloads
+- run deterministic scan analysis logic on stored/replayed inputs
+- ingest TradingView webhook payloads at the backend level
 - store and reload records with provenance
 - show simple summary-first GUI views
-- run live analysis from the GUI
+- inspect saved records and detail views
 - track run status and failure reasons
-- manage Twelve Data API keys locally in the GUI
-- test Twelve Data connectivity
-- run bounded browser fallback
-- run bounded TradingView browser extraction when configured
-- report OCR status honestly
-- keep all existing tests passing
+- keep strategy threshold settings editable
+- clearly report that no live source is currently active
 
 ## 17. What Is Still Intentionally Unsupported
 
@@ -536,29 +535,26 @@ The following are still intentionally out of scope or bounded:
 
 ## 18. What Still Needs Focus
 
-The major remaining work is still concentrated on real-data capture quality and product hardening, not widening product scope.
+The immediate focus is no longer source expansion. It is source selection discipline.
 
 Main follow-up areas:
 
-- validate the structured live path with real user Twelve Data keys
-- validate the TradingView browser adapter on real local chart pages
-- refine TradingView selectors only where live validation proves necessary
-- deepen OCR setup in a bounded way:
-  - capture input
-  - region mapping
-  - richer OCR diagnostics
+- choose the single live source that should remain in V1
+- reintroduce only that one source into the GUI and analyze flow
+- keep provenance and trust labeling explicit when the replacement source is wired in
+- avoid restoring the old fallback ladder unless there is explicit scope approval
 - continue simplifying user-facing source trust and missing-context language
 
 ## 19. Current Best Next Step
 
 The best next step after this checkpoint is:
 
-1. validate the real live-data path end-to-end with a real saved Twelve Data key
-2. validate the TradingView browser adapter on a real local chart session
-3. then deepen OCR setup in a bounded way
+1. choose the single source the product should use
+2. wire only that source back into the GUI and analyze path
+3. keep the archived integrations off the active surface unless scope is explicitly widened later
 
-That keeps the project moving toward a genuinely usable local product without drifting into fake capability or unsupported automation.
+That preserves a narrower V1 and prevents the app from drifting back into a confusing multi-source product.
 
 ## 20. One-Sentence Summary
 
-`stocknogs` began as a deterministic breakout scanner and has evolved into a local, summary-first chart-analysis assistant with structured live data support, fresh webhook reuse, bounded browser extraction, bounded OCR fallback, explicit source trust, and preserved provenance across stored analysis records.
+`stocknogs` began as a deterministic breakout scanner and is now temporarily source-neutral at the product surface so the next iteration can reintroduce one deliberate live source instead of maintaining a confusing multi-source stack.
