@@ -486,23 +486,38 @@ As of the current checkpoint, the project now has:
 
 ## 15. Current Source Program State
 
-The app no longer exposes the previous multi-source hierarchy in the active GUI workflow.
+The app now exposes exactly one active source in the GUI workflow:
 
-The previous source paths have been intentionally archived from the product surface:
+- `thinkorswim web`
+
+The current preferred live source path is implemented through the user’s real thinkorswim browser tab:
+
+- the user opens and logs into thinkorswim web manually
+- a small helper script runs inside that real tab
+- stocknogs requests ticker switches through that helper
+- the helper reads selector-based DOM values from the visible page and reports them back locally
+
+The repo now also includes a manual-session helper path for the same source:
+
+- a small in-page helper script can run inside a real logged-in thinkorswim tab
+- it extracts selector-based DOM values
+- it can either report selector data back automatically or provide pasted JSON fallback data
+- helper heartbeat, last event, and helper-side errors now surface in the GUI run-status area
+
+The older source paths are still archived from the active product surface:
 
 - Twelve Data structured live
 - Yahoo structured live / quote fallback
 - TradingView webhook reuse
-- browser extraction
 - OCR / screen-read fallback
-
-This was done to keep the product narrow while a single replacement source is chosen.
 
 Important boundary:
 
-- the code for those integrations still exists in the repo
-- the app UI no longer presents them as active choices
-- the analyze endpoint now fails clearly instead of silently trying old source paths
+- no headless stealth mode is used for the active source
+- no login automation is used for the active source
+- the active source is bounded browser extraction from a real visible thinkorswim web session
+- local startup has been simplified to a single root launcher: `start_stocknogs.bat`
+- the launcher now retries a short local port list automatically when `8080` is unavailable
 
 ## 16. What Is Working Right Now
 
@@ -514,8 +529,9 @@ As of now, the project can legitimately do all of the following:
 - show simple summary-first GUI views
 - inspect saved records and detail views
 - track run status and failure reasons
+- show helper heartbeat and helper debug events for the manual thinkorswim session
 - keep strategy threshold settings editable
-- clearly report that no live source is currently active
+- analyze symbols from the visible thinkorswim web session with bounded browser-derived selector context
 
 ## 17. What Is Still Intentionally Unsupported
 
@@ -535,13 +551,13 @@ The following are still intentionally out of scope or bounded:
 
 ## 18. What Still Needs Focus
 
-The immediate focus is no longer source expansion. It is source selection discipline.
+The immediate focus is no longer source selection. It is source hardening for the single chosen source.
 
 Main follow-up areas:
 
-- choose the single live source that should remain in V1
-- reintroduce only that one source into the GUI and analyze flow
-- keep provenance and trust labeling explicit when the replacement source is wired in
+- validate the thinkorswim selectors against real logged-in sessions and chart views
+- improve symbol, price, and timeframe extraction only where live validation proves necessary
+- keep provenance and trust labeling explicit for browser-derived context
 - avoid restoring the old fallback ladder unless there is explicit scope approval
 - continue simplifying user-facing source trust and missing-context language
 
@@ -549,12 +565,12 @@ Main follow-up areas:
 
 The best next step after this checkpoint is:
 
-1. choose the single source the product should use
-2. wire only that source back into the GUI and analyze path
+1. validate the persistent thinkorswim browser flow on your real local session
+2. refine the visible-page selectors against the exact screens you actually use
 3. keep the archived integrations off the active surface unless scope is explicitly widened later
 
-That preserves a narrower V1 and prevents the app from drifting back into a confusing multi-source product.
+That preserves a narrower V1 and keeps the app from drifting back into a confusing multi-source product.
 
 ## 20. One-Sentence Summary
 
-`stocknogs` began as a deterministic breakout scanner and is now temporarily source-neutral at the product surface so the next iteration can reintroduce one deliberate live source instead of maintaining a confusing multi-source stack.
+`stocknogs` began as a deterministic breakout scanner and now runs a single-source product surface centered on a persistent visible thinkorswim web browser session instead of a confusing multi-source stack.

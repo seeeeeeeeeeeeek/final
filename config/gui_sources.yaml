@@ -1,17 +1,25 @@
 twelvedata:
   api_key: ''
 source_preferences:
-  default_mode: browser
-  webhook_fallback_enabled: true
+  default_mode: thinkorswim_web
+  webhook_fallback_enabled: false
   browser_fallback_enabled: true
-  ocr_fallback_enabled: true
+  ocr_fallback_enabled: false
 browser:
-  provider: tradingview
+  provider: thinkorswim
   headless: false
   persist_screenshots: true
   screenshot_dir: out/browser_artifacts
-  tradingview:
+  thinkorswim:
     enabled: true
+    base_url: https://trade.thinkorswim.com/
+    profile_dir: data/browser_profiles/thinkorswim_web
+    page_load_timeout_ms: 20000
+    settle_wait_ms: 2000
+    keep_browser_open: true
+    launch_on_startup: false
+  tradingview:
+    enabled: false
     chart_url_template: ''
     exchange_prefix: NASDAQ
     page_load_timeout_ms: 15000

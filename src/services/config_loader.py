@@ -55,19 +55,20 @@ def load_source_settings(path: str | Path) -> dict[str, Any]:
     source_preferences = payload.get("source_preferences", {})
     browser = payload.get("browser", {})
     tradingview = browser.get("tradingview", {}) if isinstance(browser, dict) else {}
+    thinkorswim = browser.get("thinkorswim", {}) if isinstance(browser, dict) else {}
     return {
         "twelvedata": {
             "api_key": str(twelvedata.get("api_key", "") or "").strip(),
         },
         "source_preferences": {
-            "default_mode": str(source_preferences.get("default_mode", "auto") or "auto").strip().lower(),
+            "default_mode": str(source_preferences.get("default_mode", "thinkorswim_web") or "thinkorswim_web").strip().lower(),
             "webhook_fallback_enabled": bool(source_preferences.get("webhook_fallback_enabled", True)),
             "browser_fallback_enabled": bool(source_preferences.get("browser_fallback_enabled", True)),
             "ocr_fallback_enabled": bool(source_preferences.get("ocr_fallback_enabled", True)),
         },
         "browser": {
-            "provider": str(browser.get("provider", "yahoo") or "yahoo").strip().lower(),
-            "headless": bool(browser.get("headless", True)),
+            "provider": str(browser.get("provider", "thinkorswim") or "thinkorswim").strip().lower(),
+            "headless": bool(browser.get("headless", False)),
             "persist_screenshots": bool(browser.get("persist_screenshots", True)),
             "screenshot_dir": str(browser.get("screenshot_dir", "out/browser_artifacts") or "out/browser_artifacts").strip(),
             "tradingview": {
@@ -76,6 +77,15 @@ def load_source_settings(path: str | Path) -> dict[str, Any]:
                 "exchange_prefix": str(tradingview.get("exchange_prefix", "") or "").strip(),
                 "page_load_timeout_ms": int(tradingview.get("page_load_timeout_ms", 15000) or 15000),
                 "settle_wait_ms": int(tradingview.get("settle_wait_ms", 2500) or 2500),
+            },
+            "thinkorswim": {
+                "enabled": bool(thinkorswim.get("enabled", True)),
+                "base_url": str(thinkorswim.get("base_url", "https://trade.thinkorswim.com/") or "https://trade.thinkorswim.com/").strip(),
+                "profile_dir": str(thinkorswim.get("profile_dir", "data/browser_profiles/thinkorswim_web") or "data/browser_profiles/thinkorswim_web").strip(),
+                "page_load_timeout_ms": int(thinkorswim.get("page_load_timeout_ms", 20000) or 20000),
+                "settle_wait_ms": int(thinkorswim.get("settle_wait_ms", 2000) or 2000),
+                "keep_browser_open": bool(thinkorswim.get("keep_browser_open", True)),
+                "launch_on_startup": bool(thinkorswim.get("launch_on_startup", False)),
             },
         },
     }
@@ -137,6 +147,36 @@ def save_source_settings(path: str | Path, payload: dict[str, Any]) -> None:
         }
     )
     browser["tradingview"] = browser_tradingview
+    browser_thinkorswim = dict(browser.get("thinkorswim", {}))
+    incoming_thinkorswim = dict(incoming_browser.get("thinkorswim", {}))
+    browser_thinkorswim.update(
+        {
+            "enabled": bool(incoming_thinkorswim.get("enabled", browser_thinkorswim.get("enabled", True))),
+            "base_url": str(
+                incoming_thinkorswim.get("base_url", browser_thinkorswim.get("base_url", "https://trade.thinkorswim.com/"))
+                or "https://trade.thinkorswim.com/"
+            ).strip(),
+            "profile_dir": str(
+                incoming_thinkorswim.get("profile_dir", browser_thinkorswim.get("profile_dir", "data/browser_profiles/thinkorswim_web"))
+                or "data/browser_profiles/thinkorswim_web"
+            ).strip(),
+            "page_load_timeout_ms": int(
+                incoming_thinkorswim.get("page_load_timeout_ms", browser_thinkorswim.get("page_load_timeout_ms", 20000))
+                or 20000
+            ),
+            "settle_wait_ms": int(
+                incoming_thinkorswim.get("settle_wait_ms", browser_thinkorswim.get("settle_wait_ms", 2000))
+                or 2000
+            ),
+            "keep_browser_open": bool(
+                incoming_thinkorswim.get("keep_browser_open", browser_thinkorswim.get("keep_browser_open", True))
+            ),
+            "launch_on_startup": bool(
+                incoming_thinkorswim.get("launch_on_startup", browser_thinkorswim.get("launch_on_startup", False))
+            ),
+        }
+    )
+    browser["thinkorswim"] = browser_thinkorswim
 
     save_yaml(
         path,

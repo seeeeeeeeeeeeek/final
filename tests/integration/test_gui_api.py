@@ -165,19 +165,23 @@ def test_gui_api_replay_inserts_record_into_history_and_detail(tmp_path) -> None
         server.server_close()
 
 
-def test_gui_api_analyze_returns_paused_source_failure(tmp_path) -> None:
+def test_gui_api_analyze_thinkorswim_queues_manual_session_command(tmp_path) -> None:
     server = _start_server(tmp_path)
     try:
         status, payload = _request_json(
             f"http://127.0.0.1:{server.server_port}/api/analyze",
             method="POST",
-            body={"symbol": "SPY", "source_mode": "pending_source"},
+            body={"symbol": "SPY", "source_mode": "thinkorswim_web"},
         )
-        assert status == 400
-        assert payload["error"].startswith("Live source integrations are temporarily disabled")
-        assert payload["run_state"]["status"] == "failed"
-        assert payload["run_state"]["source_mode_requested"] == "pending_source"
-        assert payload["run_state"]["source_used"] == "source_pending"
+        assert status == 200
+        assert payload["status"] == "queued"
+        assert payload["run_state"]["source_mode_requested"] == "thinkorswim_web"
+        next_status, next_payload = _request_json(f"http://127.0.0.1:{server.server_port}/api/manual-session/next-command")
+        assert next_status == 200
+        assert next_payload["command"]["symbol"] == "SPY"
+        run_status, run_payload = _request_json(f"http://127.0.0.1:{server.server_port}/api/run-state")
+        assert run_status == 200
+        assert run_payload["manual_session_status"]["pending_symbol"] == "SPY"
     finally:
         server.shutdown()
         server.server_close()
@@ -187,12 +191,119 @@ def test_gui_api_settings_expose_only_public_source_modes_and_ocr_status(tmp_pat
     server = _start_server(tmp_path)
     try:
         _, settings = _request_json(f"http://127.0.0.1:{server.server_port}/api/settings")
-        assert [mode["value"] for mode in settings["analyze_modes"]] == ["pending_source"]
-        assert settings["source_program"]["active"] is False
-        assert settings["source_program"]["mode"] == "pending_source"
-        assert "tradingview_webhook" in settings["source_program"]["archived_integrations"]
+        assert [mode["value"] for mode in settings["analyze_modes"]] == ["thinkorswim_web"]
+        assert settings["source_program"]["active"] is True
+        assert settings["source_program"]["mode"] == "thinkorswim_web"
+        assert settings["source_program"]["browser_status"]["running"] is False
+        assert settings["source_program"]["manual_session_status"]["helper_running"] is False
         assert settings["source_settings"]["twelvedata"]["configured"] is False
-        assert settings["source_settings"]["program"]["active"] is False
+        assert settings["source_settings"]["program"]["active"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_gui_api_source_browser_start_stop_endpoints(tmp_path) -> None:
+    server = _start_server(tmp_path)
+    try:
+        with patch.object(BrowserSourceManager, "start_thinkorswim_browser", return_value={"ok": True, "status": "running", "message": "started"}):
+            with patch.object(BrowserSourceManager, "thinkorswim_browser_status", return_value={"running": True, "profile_dir": "data/browser_profiles/thinkorswim_web"}):
+                status, payload = _request_json(
+                    f"http://127.0.0.1:{server.server_port}/api/source-program/start-browser",
+                    method="POST",
+                    body={},
+                )
+        assert status == 200
+        assert payload["status"] == "running"
+        assert payload["browser_status"]["running"] is True
+
+        with patch.object(BrowserSourceManager, "stop_thinkorswim_browser", return_value={"ok": True, "status": "stopped", "message": "stopped"}):
+            with patch.object(BrowserSourceManager, "thinkorswim_browser_status", return_value={"running": False, "profile_dir": "data/browser_profiles/thinkorswim_web"}):
+                status, payload = _request_json(
+                    f"http://127.0.0.1:{server.server_port}/api/source-program/stop-browser",
+                    method="POST",
+                    body={},
+                )
+        assert status == 200
+        assert payload["status"] == "stopped"
+        assert payload["browser_status"]["running"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_gui_api_manual_session_analyze_creates_record(tmp_path) -> None:
+    server = _start_server(tmp_path)
+    try:
+        status, payload = _request_json(
+            f"http://127.0.0.1:{server.server_port}/api/manual-session/analyze",
+            method="POST",
+            body={
+                "symbol": "SPY",
+                "visible_ticker_text": "SPY",
+                "latest_visible_price": 655.87,
+                "visible_timeframe": "5m",
+                "page_title": "Individual Positions | thinkorswim",
+                "page_url": "https://trade.thinkorswim.com/",
+                "selector_debug": {"symbol": 'input[placeholder*="Find a Symbol"]'},
+            },
+        )
+        assert status == 200
+        assert payload["record"]["symbol"] == "SPY"
+        assert payload["record"]["source_class_label"] == "Browser extracted"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_gui_api_manual_session_report_creates_record_and_clears_queue(tmp_path) -> None:
+    server = _start_server(tmp_path)
+    try:
+        _request_json(
+            f"http://127.0.0.1:{server.server_port}/api/analyze",
+            method="POST",
+            body={"symbol": "SPY", "source_mode": "thinkorswim_web"},
+        )
+        status, payload = _request_json(
+            f"http://127.0.0.1:{server.server_port}/api/manual-session/report",
+            method="POST",
+            body={
+                "symbol": "SPY",
+                "visible_ticker_text": "SPY",
+                "latest_visible_price": 655.87,
+                "visible_timeframe": "5m",
+                "page_title": "Individual Positions | thinkorswim",
+                "page_url": "https://trade.thinkorswim.com/",
+            },
+        )
+        assert status == 200
+        assert payload["record"]["symbol"] == "SPY"
+        _, next_payload = _request_json(f"http://127.0.0.1:{server.server_port}/api/manual-session/next-command")
+        assert next_payload["command"] is None
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_gui_api_manual_session_debug_updates_helper_status(tmp_path) -> None:
+    server = _start_server(tmp_path)
+    try:
+        status, payload = _request_json(
+            f"http://127.0.0.1:{server.server_port}/api/manual-session/debug",
+            method="POST",
+            body={
+                "event": "switch_started",
+                "symbol": "SPY",
+                "message": "Helper received SPY and is trying to switch the live tab.",
+            },
+        )
+        assert status == 200
+        assert payload["helper_status"]["last_symbol"] == "SPY"
+        helper_status_code, helper_payload = _request_json(
+            f"http://127.0.0.1:{server.server_port}/api/manual-session/status"
+        )
+        assert helper_status_code == 200
+        assert helper_payload["helper_status"]["last_event"] == "Helper received SPY and is trying to switch the live tab."
     finally:
         server.shutdown()
         server.server_close()
@@ -565,7 +676,25 @@ def test_gui_api_settings_can_save_reset_and_load_demo(tmp_path) -> None:
             method="POST",
             body={
                 "public_webhook_url": "https://example.test/webhook",
-                "source_settings": {},
+                "source_settings": {
+                    "source_preferences": {
+                        "default_mode": "thinkorswim_web",
+                    },
+                    "browser": {
+                        "provider": "thinkorswim",
+                        "persist_screenshots": True,
+                        "screenshot_dir": "out/browser_artifacts",
+                        "thinkorswim": {
+                            "enabled": True,
+                            "base_url": "https://trade.thinkorswim.com/",
+                            "profile_dir": "data/browser_profiles/thinkorswim_web",
+                            "page_load_timeout_ms": 21000,
+                            "settle_wait_ms": 2500,
+                            "keep_browser_open": True,
+                            "launch_on_startup": False,
+                        },
+                    },
+                },
                 "editable_settings": {
                     "trend_filter": {
                         "minimum_trend_strength_score": "72",
@@ -599,14 +728,15 @@ def test_gui_api_settings_can_save_reset_and_load_demo(tmp_path) -> None:
         assert saved["ok"] is True
         assert saved["settings"]["public_webhook_url"] == "https://example.test/webhook"
         assert saved["settings"]["editable_settings"]["trend_filter"]["minimum_trend_strength_score"] == 72.0
-        assert saved["settings"]["source_program"]["active"] is False
-        assert saved["settings"]["source_settings"]["program"]["active"] is False
+        assert saved["settings"]["source_program"]["active"] is True
+        assert saved["settings"]["source_settings"]["program"]["active"] is True
 
         source_settings_file = tmp_path / "gui_sources.yaml"
         stored_source_settings = load_optional_yaml(source_settings_file)
         assert stored_source_settings["twelvedata"]["api_key"] == ""
-        assert stored_source_settings["source_preferences"]["default_mode"] == "auto"
-        assert stored_source_settings["browser"]["provider"] == "yahoo"
+        assert stored_source_settings["source_preferences"]["default_mode"] == "thinkorswim_web"
+        assert stored_source_settings["browser"]["provider"] == "thinkorswim"
+        assert stored_source_settings["browser"]["thinkorswim"]["profile_dir"] == "data/browser_profiles/thinkorswim_web"
 
         _, demo = _request_json(f"http://127.0.0.1:{server.server_port}/api/settings/load-demo", method="POST")
         assert demo["ok"] is True

@@ -1,0 +1,6 @@
+2026/04/05-13:22:25.928 4ee4 Creating DB C:\Users\Apple\Desktop\stocknogs\data\browser_profiles\thinkorswim_web\Default\IndexedDB\https_sws-gateway-nr.thinkorswim.com_0.indexeddb.leveldb since it was missing.
+2026/04/05-13:22:25.941 4ee4 Reusing MANIFEST C:\Users\Apple\Desktop\stocknogs\data\browser_profiles\thinkorswim_web\Default\IndexedDB\https_sws-gateway-nr.thinkorswim.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/04/05-13:22:29.978 301c Level-0 table #5: started
+2026/04/05-13:22:29.987 301c Level-0 table #5: 11191 bytes OK
+2026/04/05-13:22:29.990 301c Delete type=0 #3
+2026/04/05-13:22:29.991 3050 Manual compaction at level-0 from '\x00\x01\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x02\x00\x00\x00' @ 0 : 0; will stop at (end)

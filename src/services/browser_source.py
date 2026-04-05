@@ -589,12 +589,213 @@ class TradingViewChartAdapter(BrowserSourceAdapter):
         )
 
 
+class ThinkorswimWebAdapter(BrowserSourceAdapter):
+    source_name = "thinkorswim_web"
+    display_name = "thinkorswim web"
+    adapter_kind = "thinkorswim"
+
+    def __init__(
+        self,
+        *,
+        base_url: str = "https://trade.thinkorswim.com/",
+        page_load_timeout_ms: int = 20000,
+        settle_wait_ms: int = 2000,
+        persist_screenshots: bool = True,
+        screenshot_dir: str = "out/browser_artifacts",
+    ) -> None:
+        self.base_url = base_url
+        self.page_load_timeout_ms = page_load_timeout_ms
+        self.settle_wait_ms = settle_wait_ms
+        self.persist_screenshots = persist_screenshots
+        self.screenshot_dir = screenshot_dir
+
+    def build_url(self, symbol: str) -> str:
+        return self.base_url
+
+    def _capture_artifacts(self, page: Any, *, symbol: str, timestamp_utc: str) -> tuple[dict[str, str], list[str], list[str]]:
+        screenshot_paths: dict[str, str] = {}
+        captured: list[str] = []
+        warnings: list[str] = []
+        if not self.persist_screenshots:
+            return screenshot_paths, captured, warnings
+
+        base_dir = Path(self.screenshot_dir) / "thinkorswim"
+        base_dir.mkdir(parents=True, exist_ok=True)
+        stem = f"{symbol}_{_safe_filename_timestamp(timestamp_utc)}_{self.adapter_kind}"
+        try:
+            page_path = base_dir / f"{stem}_page.png"
+            page.screenshot(path=str(page_path), full_page=True)
+            screenshot_paths["page"] = str(page_path)
+            captured.append("page")
+        except Exception as exc:
+            warnings.append(f"Could not save thinkorswim page screenshot: {exc}")
+        return screenshot_paths, captured, warnings
+
+    def _search_symbol(self, page: Any, symbol: str) -> tuple[bool, str | None]:
+        selectors = [
+            'input[placeholder*="Find a Symbol"]',
+            'input[placeholder*="Symbol"]',
+            'input[type="search"]',
+        ]
+        locator, selector = _try_locator(page, selectors, timeout_ms=3000)
+        if locator is None:
+            return False, None
+        try:
+            locator.click()
+            locator.fill(symbol)
+            locator.press("Enter")
+            if self.settle_wait_ms > 0:
+                page.wait_for_timeout(self.settle_wait_ms)
+            return True, selector
+        except Exception:
+            return False, selector
+
+    def _extract_symbol_text(self, page: Any, symbol: str) -> tuple[str | None, str | None]:
+        return _try_text(
+            page,
+            selectors=[
+                f'text="{symbol}"',
+                'input[placeholder*="Find a Symbol"]',
+                'input[placeholder*="Symbol"]',
+                "h1",
+                "h2",
+            ],
+            timeout_ms=3000,
+        )
+
+    def _extract_price_text(self, page: Any) -> tuple[str | None, str | None]:
+        return _try_text(
+            page,
+            selectors=[
+                '[data-testid*="last"]',
+                '[data-testid*="price"]',
+                'div[class*="price"]',
+                'span[class*="price"]',
+            ],
+            timeout_ms=2500,
+        )
+
+    def extract(self, page: Any, *, symbol: str) -> BrowserExtractionResult:
+        start = perf_counter()
+        requested_url = self.build_url(symbol)
+        timestamp_utc = _utc_now_iso()
+        warnings: list[str] = []
+        selector_debug: dict[str, str] = {}
+        try:
+            current_url = ""
+            try:
+                current_url = page.url
+            except Exception:
+                current_url = ""
+            if not current_url:
+                page.goto(requested_url, wait_until="domcontentloaded", timeout=self.page_load_timeout_ms)
+            if self.settle_wait_ms > 0:
+                page.wait_for_timeout(self.settle_wait_ms)
+        except Exception as exc:
+            return BrowserExtractionResult(
+                ok=False,
+                source_name=self.source_name,
+                page_url_attempted=requested_url,
+                requested_url=requested_url,
+                symbol_requested=symbol,
+                symbol_detected=None,
+                timestamp_utc=None,
+                latest_visible_price=None,
+                visible_timeframe=None,
+                missing_fields=["symbol", "price"],
+                errors=[f"thinkorswim web page could not be opened in the persistent browser: {exc}"],
+                latency_ms=round((perf_counter() - start) * 1000.0, 2),
+                extraction_status="failed",
+                extraction_completeness="none",
+                trust_classification="browser_failed",
+                adapter_kind=self.adapter_kind,
+            )
+
+        search_attempted, search_selector = self._search_symbol(page, symbol)
+        if search_selector:
+            selector_debug["symbol_search"] = search_selector
+        if search_attempted:
+            warnings.append("The persistent thinkorswim browser attempted to focus the visible symbol search box.")
+        else:
+            warnings.append("No visible thinkorswim symbol search box was found, so the app relied on the current page state.")
+
+        page_title = None
+        try:
+            page_title = page.title()
+        except Exception:
+            page_title = None
+
+        visible_ticker_text, ticker_selector = self._extract_symbol_text(page, symbol)
+        if ticker_selector:
+            selector_debug["ticker"] = ticker_selector
+        price_text, price_selector = self._extract_price_text(page)
+        if price_selector:
+            selector_debug["price"] = price_selector
+
+        latest_price = _maybe_float(price_text)
+        symbol_detected = symbol if visible_ticker_text and symbol.upper() in visible_ticker_text.upper() else None
+
+        screenshot_paths, chart_regions_captured, screenshot_warnings = self._capture_artifacts(
+            page,
+            symbol=symbol,
+            timestamp_utc=timestamp_utc,
+        )
+        warnings.extend(screenshot_warnings)
+
+        fields_extracted: list[str] = []
+        if symbol_detected:
+            fields_extracted.append("symbol")
+        if latest_price is not None:
+            fields_extracted.append("latest_visible_price")
+
+        missing_fields: list[str] = []
+        if symbol_detected is None:
+            missing_fields.append("symbol")
+            warnings.append("The requested symbol was not clearly visible after the thinkorswim page interaction.")
+        if latest_price is None:
+            missing_fields.append("price")
+            warnings.append("No visible quote price was extracted from the current thinkorswim page.")
+        missing_fields.extend(["1D.bars", "1H.bars", "5m.bars"])
+        warnings.append("thinkorswim web extraction currently uses only visible page context from the persistent browser session.")
+
+        ok = symbol_detected is not None
+        return BrowserExtractionResult(
+            ok=ok,
+            source_name=self.source_name,
+            page_url_attempted=requested_url,
+            requested_url=requested_url,
+            symbol_requested=symbol,
+            symbol_detected=symbol_detected,
+            timestamp_utc=timestamp_utc,
+            latest_visible_price=latest_price,
+            visible_timeframe=None,
+            fields_extracted=fields_extracted,
+            missing_fields=missing_fields,
+            warnings=warnings,
+            errors=[] if ok else ["thinkorswim web did not show the requested symbol clearly enough to analyze."],
+            latency_ms=round((perf_counter() - start) * 1000.0, 2),
+            extraction_status="partial" if ok else "failed",
+            extraction_completeness="partial" if ok else "none",
+            trust_classification="browser_partial" if ok else "browser_failed",
+            visible_data={"ticker": visible_ticker_text, "price_text": price_text},
+            adapter_kind=self.adapter_kind,
+            page_title=page_title,
+            screenshot_paths=screenshot_paths,
+            selector_debug=selector_debug,
+            visible_ticker_text=visible_ticker_text,
+            chart_regions_captured=chart_regions_captured,
+        )
+
+
 class BrowserSourceManager:
     """Bounded Playwright browser extraction manager with explicit site adapters."""
 
     def __init__(self, *, settings_path: str | Path | None = None, headless: bool | None = None) -> None:
         self.settings_path = Path(settings_path) if settings_path is not None else None
         self._headless_override = headless
+        self._persistent_playwright = None
+        self._persistent_context = None
+        self._persistent_page = None
 
     def _browser_settings(self) -> dict[str, Any]:
         settings = load_source_settings(self.settings_path) if self.settings_path is not None else load_source_settings("config/gui_sources.yaml")
@@ -603,6 +804,7 @@ class BrowserSourceManager:
     def _build_adapters(self) -> dict[str, BrowserSourceAdapter]:
         browser_settings = self._browser_settings()
         tradingview_settings = dict(browser_settings.get("tradingview", {}))
+        thinkorswim_settings = dict(browser_settings.get("thinkorswim", {}))
         return {
             "stock_yahoo": YahooFinanceQuoteAdapter(),
             "stock_tradingview": TradingViewChartAdapter(
@@ -613,17 +815,97 @@ class BrowserSourceManager:
                 persist_screenshots=_safe_bool(browser_settings.get("persist_screenshots"), True),
                 screenshot_dir=str(browser_settings.get("screenshot_dir", "out/browser_artifacts") or "out/browser_artifacts"),
             ),
+            "stock_thinkorswim": ThinkorswimWebAdapter(
+                base_url=str(thinkorswim_settings.get("base_url", "https://trade.thinkorswim.com/") or "https://trade.thinkorswim.com/"),
+                page_load_timeout_ms=_safe_int(thinkorswim_settings.get("page_load_timeout_ms"), 20000),
+                settle_wait_ms=_safe_int(thinkorswim_settings.get("settle_wait_ms"), 2000),
+                persist_screenshots=_safe_bool(browser_settings.get("persist_screenshots"), True),
+                screenshot_dir=str(browser_settings.get("screenshot_dir", "out/browser_artifacts") or "out/browser_artifacts"),
+            ),
         }
 
     def _current_provider(self) -> str:
         browser_settings = self._browser_settings()
         provider = str(browser_settings.get("provider", "yahoo") or "yahoo").strip().lower()
+        if provider == "thinkorswim":
+            return "stock_thinkorswim"
         return "stock_tradingview" if provider == "tradingview" else "stock_yahoo"
 
     def _headless(self) -> bool:
         if self._headless_override is not None:
             return self._headless_override
         return _safe_bool(self._browser_settings().get("headless"), True)
+
+    def _thinkorswim_settings(self) -> dict[str, Any]:
+        return dict(self._browser_settings().get("thinkorswim", {}))
+
+    def start_thinkorswim_browser(self) -> dict[str, Any]:
+        settings = self._thinkorswim_settings()
+        if not _safe_bool(settings.get("enabled"), True):
+            return {"ok": False, "status": "disabled", "message": "thinkorswim web source is disabled in settings."}
+        if self._persistent_context is not None and self._persistent_page is not None:
+            return {"ok": True, "status": "running", "message": "thinkorswim web browser is already running."}
+        try:
+            playwright = _create_sync_playwright_context().start()
+            profile_dir = Path(str(settings.get("profile_dir", "data/browser_profiles/thinkorswim_web") or "data/browser_profiles/thinkorswim_web"))
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            context = playwright.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=False,
+            )
+            page = context.pages[0] if context.pages else context.new_page()
+            base_url = str(settings.get("base_url", "https://trade.thinkorswim.com/") or "https://trade.thinkorswim.com/")
+            page.goto(base_url, wait_until="domcontentloaded", timeout=_safe_int(settings.get("page_load_timeout_ms"), 20000))
+            settle_wait_ms = _safe_int(settings.get("settle_wait_ms"), 2000)
+            if settle_wait_ms > 0:
+                page.wait_for_timeout(settle_wait_ms)
+            self._persistent_playwright = playwright
+            self._persistent_context = context
+            self._persistent_page = page
+            return {"ok": True, "status": "running", "message": "thinkorswim web browser started. Log in manually once and keep this window open."}
+        except Exception as exc:
+            self.stop_thinkorswim_browser()
+            return {"ok": False, "status": "failed", "message": _browser_runtime_error_message(exc, phase="launch")}
+
+    def stop_thinkorswim_browser(self) -> dict[str, Any]:
+        if self._persistent_context is not None:
+            try:
+                self._persistent_context.close()
+            except Exception:
+                pass
+        if self._persistent_playwright is not None:
+            try:
+                self._persistent_playwright.stop()
+            except Exception:
+                pass
+        self._persistent_context = None
+        self._persistent_page = None
+        self._persistent_playwright = None
+        return {"ok": True, "status": "stopped", "message": "thinkorswim web browser stopped."}
+
+    def thinkorswim_browser_status(self) -> dict[str, Any]:
+        settings = self._thinkorswim_settings()
+        current_url = None
+        page_title = None
+        if self._persistent_page is not None:
+            try:
+                current_url = self._persistent_page.url
+            except Exception:
+                current_url = None
+            try:
+                page_title = self._persistent_page.title()
+            except Exception:
+                page_title = None
+        return {
+            "enabled": _safe_bool(settings.get("enabled"), True),
+            "running": self._persistent_context is not None and self._persistent_page is not None,
+            "profile_dir": str(settings.get("profile_dir", "data/browser_profiles/thinkorswim_web") or "data/browser_profiles/thinkorswim_web"),
+            "base_url": str(settings.get("base_url", "https://trade.thinkorswim.com/") or "https://trade.thinkorswim.com/"),
+            "keep_browser_open": _safe_bool(settings.get("keep_browser_open"), True),
+            "launch_on_startup": _safe_bool(settings.get("launch_on_startup"), False),
+            "current_url": current_url,
+            "page_title": page_title,
+        }
 
     def status_payload(self) -> dict[str, Any]:
         try:
@@ -635,6 +917,7 @@ class BrowserSourceManager:
         browser_settings = self._browser_settings()
         adapters = self._build_adapters()
         tradingview_settings = dict(browser_settings.get("tradingview", {}))
+        thinkorswim_settings = self._thinkorswim_settings()
         current_provider = self._current_provider()
         current_adapter = adapters[current_provider]
         return {
@@ -660,6 +943,16 @@ class BrowserSourceManager:
                 "exchange_prefix": str(tradingview_settings.get("exchange_prefix", "") or ""),
                 "page_load_timeout_ms": _safe_int(tradingview_settings.get("page_load_timeout_ms"), 15000),
                 "settle_wait_ms": _safe_int(tradingview_settings.get("settle_wait_ms"), 2500),
+            },
+            "thinkorswim": {
+                "enabled": _safe_bool(thinkorswim_settings.get("enabled"), True),
+                "base_url": str(thinkorswim_settings.get("base_url", "https://trade.thinkorswim.com/") or "https://trade.thinkorswim.com/"),
+                "profile_dir": str(thinkorswim_settings.get("profile_dir", "data/browser_profiles/thinkorswim_web") or "data/browser_profiles/thinkorswim_web"),
+                "page_load_timeout_ms": _safe_int(thinkorswim_settings.get("page_load_timeout_ms"), 20000),
+                "settle_wait_ms": _safe_int(thinkorswim_settings.get("settle_wait_ms"), 2000),
+                "keep_browser_open": _safe_bool(thinkorswim_settings.get("keep_browser_open"), True),
+                "launch_on_startup": _safe_bool(thinkorswim_settings.get("launch_on_startup"), False),
+                "running": self._persistent_context is not None and self._persistent_page is not None,
             },
         }
 
@@ -691,8 +984,32 @@ class BrowserSourceManager:
             )
         return self._extract_with_adapter(symbol, adapters["stock_tradingview"])
 
+    def extract_thinkorswim_symbol(self, symbol: str) -> BrowserExtractionResult:
+        adapters = self._build_adapters()
+        if self._persistent_page is None:
+            return BrowserExtractionResult(
+                ok=False,
+                source_name="thinkorswim_web",
+                page_url_attempted=str(self._thinkorswim_settings().get("base_url", "https://trade.thinkorswim.com/") or "https://trade.thinkorswim.com/"),
+                requested_url=str(self._thinkorswim_settings().get("base_url", "https://trade.thinkorswim.com/") or "https://trade.thinkorswim.com/"),
+                symbol_requested=symbol,
+                symbol_detected=None,
+                timestamp_utc=None,
+                latest_visible_price=None,
+                visible_timeframe=None,
+                missing_fields=["symbol", "price"],
+                errors=["thinkorswim web browser is not running. Start the persistent browser first."],
+                extraction_status="failed",
+                extraction_completeness="none",
+                trust_classification="browser_failed",
+                adapter_kind="thinkorswim",
+            )
+        return adapters["stock_thinkorswim"].extract(self._persistent_page, symbol=symbol)
+
     def extract_symbol(self, symbol: str) -> BrowserExtractionResult:
         provider = self._current_provider()
+        if provider == "stock_thinkorswim":
+            return self.extract_thinkorswim_symbol(symbol)
         if provider == "stock_tradingview":
             return self.extract_tradingview_chart(symbol)
         return self.extract_stock_quote(symbol, provider="yahoo")
