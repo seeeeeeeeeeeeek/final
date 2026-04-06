@@ -21,7 +21,7 @@ from src.services.config_loader import (
     save_source_settings,
     save_yaml,
 )
-from src.services.browser_source import BrowserSourceManager
+from src.services.browser_source import BrowserExtractionResult, BrowserSourceManager
 from src.services.gui_html import build_index_html
 from src.services.gui_responses import build_detail_payload, build_replay_result_payload
 from src.services.gui_state import GUIState
@@ -34,9 +34,70 @@ from src.utils.validation import validate_scan_record
 
 _TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 _FRESH_WEBHOOK_MAX_AGE_SECONDS = 15 * 60
-_SOURCE_PROGRAM_MODE = "pending_source"
-_SOURCE_PROGRAM_LABEL = "Source Pending"
-_SOURCE_PROGRAM_MESSAGE = "Live source integrations are temporarily disabled while the app is narrowed to one source. Choose the replacement source before running live analysis."
+_SOURCE_PROGRAM_MODE = "thinkorswim_web"
+_SOURCE_PROGRAM_LABEL = "thinkorswim web"
+_SOURCE_PROGRAM_MESSAGE = (
+    "Use the app-managed thinkorswim browser when possible. Start the browser from stocknogs, "
+    "log in there once, and let the app switch symbols directly. If browser automation is unavailable "
+    "or the managed session gets stuck, use the browser extension bridge or the manual session JSON fallback."
+)
+_MANUAL_SESSION_HELPER_PATH = "scripts/thinkorswim_manual_session_helper.js"
+_MANUAL_SESSION_EXTENSION_PATH = "extensions/stocknogs_thinkorswim_bridge"
+
+
+def _manual_session_payload_to_browser_result(payload: dict[str, Any]) -> BrowserExtractionResult:
+    symbol = str(payload.get("symbol", "") or "").strip().upper()
+    latest_price = _float_or_none(payload.get("latest_visible_price"))
+    visible_timeframe = str(payload.get("visible_timeframe", "") or "").strip() or None
+    page_url = str(payload.get("page_url", "https://trade.thinkorswim.com/") or "https://trade.thinkorswim.com/").strip()
+    page_title = str(payload.get("page_title", "") or "").strip() or None
+    visible_ticker_text = str(payload.get("visible_ticker_text", symbol) or symbol).strip() or None
+    selector_debug = dict(payload.get("selector_debug", {}))
+    screenshot_paths = dict(payload.get("screenshot_paths", {}))
+    chart_regions_captured = list(payload.get("chart_regions_captured", []))
+    timestamp_utc = _utc_now_iso()
+    warnings = list(payload.get("warnings", []))
+    warnings.append("This result came from selector-based extraction on a manually opened thinkorswim web session.")
+    missing_fields: list[str] = []
+    fields_extracted: list[str] = []
+    if symbol:
+        fields_extracted.append("symbol")
+    else:
+        missing_fields.append("symbol")
+    if latest_price is not None:
+        fields_extracted.append("latest_visible_price")
+    else:
+        missing_fields.append("price")
+    if visible_timeframe:
+        fields_extracted.append("timeframe")
+    missing_fields.extend(["1D.bars", "1H.bars", "5m.bars"])
+    ok = bool(symbol)
+    return BrowserExtractionResult(
+        ok=ok,
+        source_name="thinkorswim_manual_session",
+        page_url_attempted=page_url,
+        requested_url=page_url,
+        symbol_requested=symbol,
+        symbol_detected=symbol or None,
+        timestamp_utc=timestamp_utc,
+        latest_visible_price=latest_price,
+        visible_timeframe=visible_timeframe,
+        fields_extracted=fields_extracted,
+        missing_fields=missing_fields,
+        warnings=warnings,
+        errors=[] if ok else ["Manual thinkorswim session payload did not include a usable symbol."],
+        extraction_status="partial" if ok else "failed",
+        extraction_completeness="partial" if ok else "none",
+        trust_classification="browser_partial" if ok else "browser_failed",
+        visible_data=dict(payload.get("visible_data", {})),
+        adapter_kind="thinkorswim_manual",
+        page_title=page_title,
+        screenshot_paths=screenshot_paths,
+        selector_debug=selector_debug,
+        visible_ticker_text=visible_ticker_text,
+        visible_timeframe_text=visible_timeframe,
+        chart_regions_captured=chart_regions_captured,
+    )
 
 
 def _failed_run_state(source_mode: str, failure_reason: str) -> dict[str, Any]:
@@ -170,30 +231,34 @@ def _build_override_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], st
 
 def _build_source_settings_payload(payload: dict[str, Any]) -> dict[str, Any]:
     source_settings = dict(payload.get("source_settings", {}))
-    twelvedata = dict(source_settings.get("twelvedata", {}))
     preferences = dict(source_settings.get("source_preferences", {}))
     browser = dict(source_settings.get("browser", {}))
     tradingview = dict(browser.get("tradingview", {}))
-    twelvedata_payload: dict[str, Any] = {}
-    if payload.get("clear_twelvedata_key"):
-        twelvedata_payload["api_key"] = ""
-    elif str(twelvedata.get("api_key", "") or "").strip():
-        twelvedata_payload["api_key"] = str(twelvedata.get("api_key", "") or "").strip()
+    thinkorswim = dict(browser.get("thinkorswim", {}))
     return {
-        "twelvedata": twelvedata_payload,
+        "twelvedata": {"api_key": ""},
         "source_preferences": {
-            "default_mode": str(preferences.get("default_mode", "auto") or "auto").strip().lower(),
-            "webhook_fallback_enabled": bool(preferences.get("webhook_fallback_enabled", True)),
-            "browser_fallback_enabled": bool(preferences.get("browser_fallback_enabled", True)),
-            "ocr_fallback_enabled": bool(preferences.get("ocr_fallback_enabled", True)),
+            "default_mode": str(preferences.get("default_mode", _SOURCE_PROGRAM_MODE) or _SOURCE_PROGRAM_MODE).strip().lower(),
+            "webhook_fallback_enabled": False,
+            "browser_fallback_enabled": True,
+            "ocr_fallback_enabled": False,
         },
         "browser": {
-            "provider": str(browser.get("provider", "yahoo") or "yahoo").strip().lower(),
-            "headless": bool(browser.get("headless", True)),
+            "provider": "thinkorswim",
+            "headless": False,
             "persist_screenshots": bool(browser.get("persist_screenshots", True)),
             "screenshot_dir": str(browser.get("screenshot_dir", "out/browser_artifacts") or "out/browser_artifacts"),
+            "thinkorswim": {
+                "enabled": bool(thinkorswim.get("enabled", True)),
+                "base_url": str(thinkorswim.get("base_url", "https://trade.thinkorswim.com/") or "https://trade.thinkorswim.com/").strip(),
+                "profile_dir": str(thinkorswim.get("profile_dir", "data/browser_profiles/thinkorswim_web") or "data/browser_profiles/thinkorswim_web").strip(),
+                "page_load_timeout_ms": int(thinkorswim.get("page_load_timeout_ms", 20000) or 20000),
+                "settle_wait_ms": int(thinkorswim.get("settle_wait_ms", 2000) or 2000),
+                "keep_browser_open": bool(thinkorswim.get("keep_browser_open", True)),
+                "launch_on_startup": bool(thinkorswim.get("launch_on_startup", False)),
+            },
             "tradingview": {
-                "enabled": bool(tradingview.get("enabled", False)),
+                "enabled": False,
                 "chart_url_template": str(tradingview.get("chart_url_template", "") or "").strip(),
                 "exchange_prefix": str(tradingview.get("exchange_prefix", "") or "").strip(),
                 "page_load_timeout_ms": int(tradingview.get("page_load_timeout_ms", 15000) or 15000),
@@ -215,6 +280,12 @@ class GUIApplication:
     override_path: Path | None = None
     demo_override_path: Path | None = None
     source_settings_path: Path | None = None
+    manual_session_target_symbol: str | None = None
+    manual_session_command_id: int = 0
+    manual_session_last_seen_at: str | None = None
+    manual_session_last_event: str | None = None
+    manual_session_last_error: str | None = None
+    manual_session_last_symbol: str | None = None
 
     def reload_config(self) -> ScanConfig:
         self.processor.config = load_scan_config(self.config_dir, override_path=self.override_path)
@@ -240,15 +311,20 @@ class GUIApplication:
         requested_source_mode: str = "browser",
         fallback_chain: list[str] | None = None,
         inherited_warnings: list[str] | None = None,
+        precomputed_result: BrowserExtractionResult | None = None,
     ) -> tuple[int, dict[str, Any]]:
         fallback_chain = list(fallback_chain or [])
         inherited_warnings = list(inherited_warnings or [])
-        self.state.advance_run("Preparing browser extraction", mode_kind="browser")
-        self.state.advance_run("Opening supported page", mode_kind="browser")
-        self.state.advance_run("Waiting for page content", mode_kind="browser")
-        self.state.advance_run("Searching symbol", mode_kind="browser")
-        self.state.advance_run("Extracting visible data", mode_kind="browser")
-        result = self.browser_service.extract_symbol(symbol)
+        if precomputed_result is None:
+            self.state.advance_run("Preparing browser extraction", mode_kind="browser")
+            self.state.advance_run("Opening supported page", mode_kind="browser")
+            self.state.advance_run("Waiting for page content", mode_kind="browser")
+            self.state.advance_run("Searching symbol", mode_kind="browser")
+            self.state.advance_run("Extracting visible data", mode_kind="browser")
+            result = self.browser_service.extract_symbol(symbol)
+        else:
+            self.state.advance_run("Normalizing manual session data", mode_kind="manual_session")
+            result = precomputed_result
         warnings = list(inherited_warnings) + list(result.warnings)
         if result.errors:
             warnings.extend(result.errors)
@@ -390,27 +466,28 @@ class GUIApplication:
         tradingview = dict(browser.get("tradingview", {}))
         return {
             "twelvedata": {
-                "configured": bool(api_key),
-                "masked_api_key": _mask_secret(api_key),
+                "configured": False,
+                "masked_api_key": None,
             },
             "source_preferences": {
-                "default_mode": source_preferences.get("default_mode", "auto"),
-                "webhook_fallback_enabled": bool(source_preferences.get("webhook_fallback_enabled", True)),
-                "browser_fallback_enabled": bool(source_preferences.get("browser_fallback_enabled", True)),
-                "ocr_fallback_enabled": bool(source_preferences.get("ocr_fallback_enabled", True)),
+                "default_mode": source_preferences.get("default_mode", _SOURCE_PROGRAM_MODE),
+                "webhook_fallback_enabled": False,
+                "browser_fallback_enabled": True,
+                "ocr_fallback_enabled": False,
                 "auto_priority": [
-                    "Twelve Data",
-                    "Yahoo fallback",
-                    "Fresh TradingView webhook",
-                    "TRADINGVIEW LIVE fallback",
-                    "Screen read fallback",
+                    "thinkorswim web persistent browser",
                 ],
             },
             "browser": {
-                "provider": str(browser.get("provider", "yahoo") or "yahoo"),
-                "headless": bool(browser.get("headless", True)),
+                "provider": "thinkorswim",
+                "headless": False,
                 "persist_screenshots": bool(browser.get("persist_screenshots", True)),
                 "screenshot_dir": str(browser.get("screenshot_dir", "out/browser_artifacts") or "out/browser_artifacts"),
+                "thinkorswim": {
+                    **self.browser_service.thinkorswim_browser_status(),
+                    "page_load_timeout_ms": int(dict(browser.get("thinkorswim", {})).get("page_load_timeout_ms", 20000) or 20000),
+                    "settle_wait_ms": int(dict(browser.get("thinkorswim", {})).get("settle_wait_ms", 2000) or 2000),
+                },
                 "tradingview": {
                     "enabled": bool(tradingview.get("enabled", False)),
                     "chart_url_configured": bool(str(tradingview.get("chart_url_template", "") or "").strip()),
@@ -420,10 +497,10 @@ class GUIApplication:
                 },
             },
             "program": {
-                "active": False,
+                "active": True,
                 "mode": _SOURCE_PROGRAM_MODE,
                 "message": _SOURCE_PROGRAM_MESSAGE,
-                "archived_integrations": ["twelvedata", "yahoo", "tradingview_webhook", "browser", "ocr"],
+                "archived_integrations": ["twelvedata", "yahoo", "tradingview_webhook", "ocr"],
             },
         }
 
@@ -499,6 +576,120 @@ class GUIApplication:
             "record": self.state.record_summary(stored),
             "result": replay_result,
             "run_state": self.state.run_state_payload(),
+        }
+
+    def analyze_manual_session(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        symbol = str(payload.get("symbol", "") or "").strip().upper()
+        self.state.start_run(symbol=symbol or "", source_mode=_SOURCE_PROGRAM_MODE)
+        self.state.advance_run("Reading manual thinkorswim session payload", mode_kind="manual_session")
+        result = _manual_session_payload_to_browser_result(payload)
+        if not result.ok:
+            reason = result.errors[0] if result.errors else "Manual session payload was incomplete."
+            self.state.fail_run(
+                reason,
+                source_used=result.source_name,
+                source_class="browser_failed",
+                warnings=list(result.warnings),
+                mode_kind="manual_session",
+            )
+            return 400, {"ok": False, "error": reason, "run_state": self.state.run_state_payload()}
+        return self._build_browser_record(
+            result.symbol_detected or result.symbol_requested,
+            requested_source_mode=_SOURCE_PROGRAM_MODE,
+            fallback_chain=[],
+            inherited_warnings=[],
+            precomputed_result=result,
+        )
+
+    def queue_manual_session_command(self, symbol: str) -> tuple[int, dict[str, Any]]:
+        self.manual_session_target_symbol = symbol
+        self.manual_session_command_id += 1
+        self.manual_session_last_symbol = symbol
+        self.manual_session_last_event = f"Queued symbol switch for {symbol}."
+        self.manual_session_last_error = None
+        self.state.advance_run(
+            "Waiting for thinkorswim helper to switch the live tab",
+            source_used="thinkorswim_manual_session",
+            source_class="browser_partial",
+            mode_kind="manual_session",
+        )
+        return 200, {
+            "ok": True,
+            "status": "queued",
+            "message": f"Queued {symbol} for the manual thinkorswim helper.",
+            "command_id": self.manual_session_command_id,
+            "symbol": symbol,
+            "run_state": self.state.run_state_payload(),
+        }
+
+    def next_manual_session_command(self) -> dict[str, Any]:
+        self.manual_session_last_seen_at = _utc_now_iso()
+        if not self.manual_session_target_symbol:
+            return {"ok": True, "status": "idle", "command": None}
+        return {
+            "ok": True,
+            "status": "queued",
+            "command": {
+                "id": self.manual_session_command_id,
+                "symbol": self.manual_session_target_symbol,
+                "action": "switch_symbol",
+            },
+        }
+
+    def report_manual_session_payload(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        self.manual_session_last_seen_at = _utc_now_iso()
+        self.manual_session_last_event = "Helper reported selector data back to stocknogs."
+        self.manual_session_last_error = None
+        status_code, response = self.analyze_manual_session(payload)
+        if status_code == 200:
+            self.manual_session_target_symbol = None
+        return status_code, response
+
+    def report_manual_session_debug(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        event = str(payload.get("event", "") or "").strip() or "helper_event"
+        symbol = str(payload.get("symbol", "") or "").strip().upper() or None
+        message = str(payload.get("message", "") or "").strip() or event
+        error = str(payload.get("error", "") or "").strip() or None
+        self.manual_session_last_seen_at = _utc_now_iso()
+        self.manual_session_last_event = message
+        self.manual_session_last_error = error
+        if symbol:
+            self.manual_session_last_symbol = symbol
+        if error:
+            warnings = list(self.state.run_state_payload().get("warnings", []))
+            warnings.append(f"Helper error: {error}")
+            self.state.advance_run(
+                "Helper reported an in-tab error",
+                source_used="thinkorswim_manual_session",
+                source_class="browser_partial",
+                warnings=warnings,
+                mode_kind="manual_session",
+            )
+        elif event == "switch_started" and symbol:
+            self.state.advance_run(
+                f"Helper is switching the live thinkorswim tab to {symbol}",
+                source_used="thinkorswim_manual_session",
+                source_class="browser_partial",
+                mode_kind="manual_session",
+            )
+        elif event == "switch_finished" and symbol:
+            self.state.advance_run(
+                f"Helper switched the live thinkorswim tab to {symbol} and is collecting selectors",
+                source_used="thinkorswim_manual_session",
+                source_class="browser_partial",
+                mode_kind="manual_session",
+            )
+        return 200, {"ok": True, "helper_status": self.manual_session_status()}
+
+    def manual_session_status(self) -> dict[str, Any]:
+        return {
+            "pending_symbol": self.manual_session_target_symbol,
+            "command_id": self.manual_session_command_id,
+            "last_seen_at": self.manual_session_last_seen_at,
+            "last_event": self.manual_session_last_event,
+            "last_error": self.manual_session_last_error,
+            "last_symbol": self.manual_session_last_symbol,
+            "helper_running": bool(self.manual_session_last_seen_at),
         }
 
     def process_payload(
@@ -773,14 +964,54 @@ class GUIApplication:
             return 400, {"ok": False, "error": reason, "run_state": self.state.run_state_payload()}
 
         self.state.start_run(symbol=symbol, source_mode=source_mode)
-        reason = _SOURCE_PROGRAM_MESSAGE
+        if source_mode != _SOURCE_PROGRAM_MODE:
+            reason = f"Unsupported source mode: {source_mode}"
+            self.state.fail_run(reason, source_used="unsupported_source", source_class="unavailable", mode_kind="live")
+            return 400, {"ok": False, "error": reason, "run_state": self.state.run_state_payload()}
+
+        helper_status = self.manual_session_status()
+        browser_status = self.browser_service.thinkorswim_browser_status()
+        if browser_status.get("running"):
+            status_code, response = self._build_browser_record(symbol, requested_source_mode=_SOURCE_PROGRAM_MODE)
+            if status_code == 200:
+                return status_code, response
+            if helper_status.get("helper_running"):
+                queue_status, queue_response = self.queue_manual_session_command(symbol)
+                queue_response["message"] = (
+                    "The managed thinkorswim browser did not return usable page data, so stocknogs queued the "
+                    "symbol for the browser extension/manual helper bridge instead."
+                )
+                queue_response["fallback_reason"] = response.get("error")
+                queue_response["browser_result"] = response.get("browser_result")
+                return queue_status, queue_response
+            return status_code, response
+
+        if helper_status.get("helper_running"):
+            return self.queue_manual_session_command(symbol)
+
+        status_payload = self.browser_service.status_payload()
+        if not status_payload.get("playwright_available"):
+            reason = (
+                "Playwright is not installed, so stocknogs cannot launch the thinkorswim browser yet. "
+                "Install Playwright, then start the source browser, or use the browser extension bridge/manual payload fallback."
+            )
+        else:
+            reason = (
+                "The stocknogs thinkorswim browser is not running. Start the source browser in Live Analysis, "
+                "log in there once, then analyze again. You can still use the browser extension bridge or the Manual Session Payload box as a fallback."
+            )
         self.state.fail_run(
             reason,
-            source_used="source_pending",
+            source_used="thinkorswim_web",
             source_class="unavailable",
-            mode_kind="live",
+            mode_kind="browser",
         )
-        return 400, {"ok": False, "error": reason, "run_state": self.state.run_state_payload()}
+        return 400, {
+            "ok": False,
+            "error": reason,
+            "browser_status": browser_status,
+            "run_state": self.state.run_state_payload(),
+        }
 
     def settings_response(self, *, server_port: int) -> dict[str, Any]:
         payload = self.state.settings_payload(
@@ -816,11 +1047,32 @@ class GUIApplication:
         payload["source_program"] = {
             "mode": _SOURCE_PROGRAM_MODE,
             "label": _SOURCE_PROGRAM_LABEL,
-            "active": False,
+            "active": True,
             "message": _SOURCE_PROGRAM_MESSAGE,
-            "archived_integrations": ["twelvedata", "yahoo", "tradingview_webhook", "browser", "ocr"],
+            "browser_status": self.browser_service.thinkorswim_browser_status(),
+            "manual_session_status": self.manual_session_status(),
+            "manual_session_helper": {
+                "path": _MANUAL_SESSION_HELPER_PATH,
+                "submit_endpoint": "/api/manual-session/analyze",
+            },
+            "manual_session_extension": {
+                "path": _MANUAL_SESSION_EXTENSION_PATH,
+                "popup_path": f"{_MANUAL_SESSION_EXTENSION_PATH}/popup.html",
+                "submit_endpoint": "/api/manual-session/report",
+                "description": "Load this unpacked extension in your normal browser to bridge thinkorswim tabs back to stocknogs without DevTools console fetch calls.",
+            },
+            "archived_integrations": ["twelvedata", "yahoo", "tradingview_webhook", "ocr"],
         }
         return payload
+
+    def start_source_browser(self) -> tuple[int, dict[str, Any]]:
+        result = self.browser_service.start_thinkorswim_browser()
+        status_code = 200 if result.get("ok") else 400
+        return status_code, {"ok": bool(result.get("ok")), **result, "browser_status": self.browser_service.thinkorswim_browser_status()}
+
+    def stop_source_browser(self) -> tuple[int, dict[str, Any]]:
+        result = self.browser_service.stop_thinkorswim_browser()
+        return 200, {"ok": True, **result, "browser_status": self.browser_service.thinkorswim_browser_status()}
 
     def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self.override_path is None:
@@ -897,8 +1149,15 @@ def create_gui_server(
         demo_override_path=Path(demo_override_path) if demo_override_path is not None else None,
         source_settings_path=source_settings_file,
     )
+    if app.browser_service.thinkorswim_browser_status().get("launch_on_startup"):
+        app.browser_service.start_thinkorswim_browser()
 
     class GUIHandler(BaseHTTPRequestHandler):
+        def do_OPTIONS(self) -> None:  # noqa: N802
+            self.send_response(204)
+            self._write_cors_headers()
+            self.end_headers()
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             if parsed.path == "/":
@@ -908,10 +1167,26 @@ def create_gui_server(
                 self._write_json(200, app.state.health_payload(host=app.host, port=self.server.server_port))
                 return
             if parsed.path == "/api/run-state":
-                self._write_json(200, {"ok": True, "run_state": app.state.run_state_payload()})
+                self._write_json(
+                    200,
+                    {
+                        "ok": True,
+                        "run_state": app.state.run_state_payload(),
+                        "manual_session_status": app.manual_session_status(),
+                    },
+                )
                 return
             if parsed.path == "/api/settings":
                 self._write_json(200, app.settings_response(server_port=self.server.server_port))
+                return
+            if parsed.path == "/api/manual-session/next-command":
+                self._write_json(200, app.next_manual_session_command())
+                return
+            if parsed.path == "/api/manual-session/status":
+                self._write_json(200, {"ok": True, "helper_status": app.manual_session_status()})
+                return
+            if parsed.path == "/api/source-program/browser-status":
+                self._write_json(200, {"ok": True, "browser_status": app.browser_service.thinkorswim_browser_status()})
                 return
             if parsed.path == "/api/source-settings/test-twelvedata":
                 status_code, payload = app.test_twelvedata_connection()
@@ -976,6 +1251,11 @@ def create_gui_server(
                 "/api/settings/reset",
                 "/api/settings/load-demo",
                 "/api/records/clear",
+                "/api/source-program/start-browser",
+                "/api/source-program/stop-browser",
+                "/api/manual-session/analyze",
+                "/api/manual-session/report",
+                "/api/manual-session/debug",
             }:
                 self._write_json(404, {"ok": False, "error": "Not found."})
                 return
@@ -1017,6 +1297,26 @@ def create_gui_server(
                     status_code, response = app.clear_records(payload)
                     self._write_json(status_code, response)
                     return
+                if self.path == "/api/manual-session/analyze":
+                    status_code, response = app.analyze_manual_session(payload)
+                    self._write_json(status_code, response)
+                    return
+                if self.path == "/api/manual-session/report":
+                    status_code, response = app.report_manual_session_payload(payload)
+                    self._write_json(status_code, response)
+                    return
+                if self.path == "/api/manual-session/debug":
+                    status_code, response = app.report_manual_session_debug(payload)
+                    self._write_json(status_code, response)
+                    return
+                if self.path == "/api/source-program/start-browser":
+                    status_code, response = app.start_source_browser()
+                    self._write_json(status_code, response)
+                    return
+                if self.path == "/api/source-program/stop-browser":
+                    status_code, response = app.stop_source_browser()
+                    self._write_json(status_code, response)
+                    return
             except ValueError as exc:
                 self._write_json(400, {"ok": False, "error": str(exc)})
                 return
@@ -1039,6 +1339,7 @@ def create_gui_server(
         def _write_json(self, status_code: int, payload: dict[str, Any]) -> None:
             body = json.dumps(payload, sort_keys=True).encode("utf-8")
             self.send_response(status_code)
+            self._write_cors_headers()
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -1047,12 +1348,17 @@ def create_gui_server(
         def _write_html(self, status_code: int, body: str) -> None:
             encoded = body.encode("utf-8")
             self.send_response(status_code)
+            self._write_cors_headers()
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(encoded)))
             self.end_headers()
             self.wfile.write(encoded)
 
+        def _write_cors_headers(self) -> None:
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
     server = ThreadingHTTPServer((host, port), GUIHandler)
     app.port = server.server_port
     return server
-

@@ -214,7 +214,7 @@ def build_index_html() -> str:
   <div class="app">
     <aside class="sidebar">
       <div class="brand">stock<span>nogs</span></div>
-      <div class="tagline">A local breakout-analysis workspace with the source layer temporarily narrowed while the next single source is chosen.</div>
+      <div class="tagline">A local breakout-analysis workspace powered by thinkorswim web, with a managed browser path plus an extension/manual bridge fallback.</div>
       <div class="sidebar-label">Workspace</div>
       <nav class="nav">""" + _nav_markup() + """</nav>
     </aside>
@@ -229,10 +229,10 @@ def build_index_html() -> str:
         <div class="grid two-col">
           <div class="card">
             <h2>Analyze Ticker</h2>
-            <div class="helper-copy">The source layer is temporarily disabled while the app is narrowed to one future source. You can still inspect saved records and keep the strategy settings in place.</div>
+            <div class="helper-copy">Use thinkorswim web as the only live source. Preferred flow: start the stocknogs-managed browser, log in there once, and let stocknogs switch symbols directly. If that session gets stuck, use the browser extension bridge in your normal logged-in thinkorswim tab. Manual session JSON stays available as the fallback.</div>
             <div class="settings-grid" style="margin-top:12px;">
               <div><label>Ticker</label><input id="analyze-symbol" placeholder="NVDA"></div>
-              <div><label>Source program</label><select id="analyze-source-mode"></select></div>
+              <div><label>Source</label><select id="analyze-source-mode"></select></div>
             </div>
             <div class="button-row">
               <button class="action" id="analyze-submit">Analyze</button>
@@ -240,10 +240,18 @@ def build_index_html() -> str:
               <button class="ghost" id="clear-current-selection">Clear current selection</button>
             </div>
             <div id="source-program-panel" class="summary-stack" style="margin-top:14px;"></div>
+            <div style="margin-top:16px;">
+              <div class="section-title">Manual Session Payload</div>
+              <div class="helper-copy">Manual fallback only. If browser automation is unavailable or the page blocks direct helper callbacks, paste a selector-based JSON payload here and submit it.</div>
+              <textarea id="manual-session-payload" placeholder='{"symbol":"SPY","latest_visible_price":655.87,"visible_timeframe":"5m"}'></textarea>
+              <div class="button-row">
+                <button class="secondary" id="submit-manual-session">Submit Session JSON</button>
+              </div>
+            </div>
           </div>
           <div class="card status-panel">
             <h2>Run Status</h2>
-            <div class="helper-copy">See whether analysis is idle, blocked on the missing source decision, or completed from existing saved records.</div>
+            <div class="helper-copy">See whether the thinkorswim browser is ready, what the app attempted, and whether the visible page provided enough context.</div>
             <div id="run-status-panel" class="summary-stack"></div>
           </div>
         </div>
@@ -324,15 +332,18 @@ def build_index_html() -> str:
     }
     function renderRunState(state) {
       const runState = state || {};
+      const helper = runState.manual_session_status || {};
       const fallbackText = runState.fallback_chain && runState.fallback_chain.length ? runState.fallback_chain.join(' -> ') : 'None';
       const warningItems = runState.warnings && runState.warnings.length ? runState.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join('') : '<li>No warnings</li>';
       const stageItems = runState.completed_steps && runState.completed_steps.length ? runState.completed_steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('') : '<li>Waiting to start</li>';
-      return `<div class="summary-line"><strong>Status</strong><span>${escapeHtml(runState.status || 'idle')}</span></div><div class="summary-line"><strong>Ticker</strong><span>${escapeHtml(runState.current_ticker || 'None')}</span></div><div class="summary-line"><strong>Requested source</strong><span>${escapeHtml(runState.source_mode_requested || 'Not selected')}</span></div><div class="summary-line"><strong>Current step</strong><span>${escapeHtml(runState.current_step || 'Waiting to start')}</span></div><div class="summary-line"><strong>Used source</strong><span>${escapeHtml(runState.source_used || 'Not resolved')}</span></div><div class="summary-line"><strong>Source class</strong><span>${escapeHtml(runState.source_class_label || 'Unavailable')}</span></div><div class="summary-line"><strong>Coverage</strong><span>${escapeHtml(runState.coverage_text || 'Not available yet')}</span></div><div class="summary-line"><strong>Missing context</strong><span>${escapeHtml((runState.missing_context || []).join(', ') || 'None')}</span></div><div class="summary-line"><strong>Fallback chain</strong><span>${escapeHtml(fallbackText)}</span></div>${runState.failure_reason ? `<div class="summary-line"><strong>Failure</strong><span>${escapeHtml(runState.failure_reason)}</span></div>` : ''}<div class="helper-copy">Completed stages</div><ul class="bullet-list">${stageItems}</ul><div class="helper-copy">Warnings</div><ul class="bullet-list">${warningItems}</ul>`;
+      return `<div class="summary-line"><strong>Status</strong><span>${escapeHtml(runState.status || 'idle')}</span></div><div class="summary-line"><strong>Ticker</strong><span>${escapeHtml(runState.current_ticker || 'None')}</span></div><div class="summary-line"><strong>Requested source</strong><span>${escapeHtml(runState.source_mode_requested || 'Not selected')}</span></div><div class="summary-line"><strong>Current step</strong><span>${escapeHtml(runState.current_step || 'Waiting to start')}</span></div><div class="summary-line"><strong>Used source</strong><span>${escapeHtml(runState.source_used || 'Not resolved')}</span></div><div class="summary-line"><strong>Source class</strong><span>${escapeHtml(runState.source_class_label || 'Unavailable')}</span></div><div class="summary-line"><strong>Coverage</strong><span>${escapeHtml(runState.coverage_text || 'Not available yet')}</span></div><div class="summary-line"><strong>Missing context</strong><span>${escapeHtml((runState.missing_context || []).join(', ') || 'None')}</span></div><div class="summary-line"><strong>Fallback chain</strong><span>${escapeHtml(fallbackText)}</span></div><div class="summary-line"><strong>Helper last event</strong><span>${escapeHtml(helper.last_event || 'No helper activity yet')}</span></div><div class="summary-line"><strong>Helper last seen</strong><span>${escapeHtml(helper.last_seen_at || 'Not seen yet')}</span></div>${helper.last_error ? `<div class="summary-line"><strong>Helper error</strong><span>${escapeHtml(helper.last_error)}</span></div>` : ''}${runState.failure_reason ? `<div class="summary-line"><strong>Failure</strong><span>${escapeHtml(runState.failure_reason)}</span></div>` : ''}<div class="helper-copy">Completed stages</div><ul class="bullet-list">${stageItems}</ul><div class="helper-copy">Warnings</div><ul class="bullet-list">${warningItems}</ul>`;
     }
     function renderSourceProgramStatus(settings) {
       const program = settings?.source_program || settings?.source_settings?.program || {};
       const archived = program.archived_integrations || [];
-      return `<div class="section-title">Source Program</div><div class="helper-copy">${escapeHtml(program.message || 'No active source selected yet.')}</div><div class="summary-line"><strong>Status</strong><span>${escapeHtml(program.active ? 'Active' : 'Paused')}</span></div><div class="summary-line"><strong>Current mode</strong><span>${escapeHtml(program.label || 'Source Pending')}</span></div><div class="summary-line"><strong>Archived integrations</strong><span>${escapeHtml(archived.join(', ') || 'None')}</span></div><div class="helper-copy">The previous integrations remain in the codebase but are intentionally hidden from the current app flow.</div>`;
+      const browserStatus = program.browser_status || settings?.browser_status?.thinkorswim || {};
+      const helperStatus = program.manual_session_status || {};
+      return `<div class="section-title">Source Program</div><div class="helper-copy">${escapeHtml(program.message || 'thinkorswim web is the only active source.')}</div><div class="button-row"><button class="secondary" id="source-browser-start">Start Browser</button><button class="ghost" id="source-browser-stop">Stop Browser</button></div><div class="summary-line"><strong>Status</strong><span>${escapeHtml(program.active ? 'Active' : 'Paused')}</span></div><div class="summary-line"><strong>Current mode</strong><span>${escapeHtml(program.label || 'thinkorswim web')}</span></div><div class="summary-line"><strong>Playwright ready</strong><span>${escapeHtml(settings?.browser_status?.playwright_available ? 'Yes' : 'No')}</span></div><div class="summary-line"><strong>Browser running</strong><span>${escapeHtml(browserStatus.running ? 'Yes' : 'No')}</span></div><div class="summary-line"><strong>Profile dir</strong><span>${escapeHtml(browserStatus.profile_dir || 'Not set')}</span></div><div class="summary-line"><strong>Current page</strong><span>${escapeHtml(browserStatus.page_title || browserStatus.current_url || 'Not available')}</span></div><div class="summary-line"><strong>Extension bridge</strong><span>${escapeHtml(program.manual_session_extension?.path || 'extensions/stocknogs_thinkorswim_bridge')}</span></div><div class="summary-line"><strong>Console helper</strong><span>${escapeHtml(program.manual_session_helper?.path || 'scripts/thinkorswim_manual_session_helper.js')}</span></div><div class="summary-line"><strong>Helper heartbeat</strong><span>${escapeHtml(helperStatus.last_seen_at || 'Not seen yet')}</span></div><div class="summary-line"><strong>Helper event</strong><span>${escapeHtml(helperStatus.last_event || 'No helper activity yet')}</span></div>${helperStatus.last_error ? `<div class="summary-line"><strong>Helper error</strong><span>${escapeHtml(helperStatus.last_error)}</span></div>` : ''}<div class="summary-line"><strong>Archived integrations</strong><span>${escapeHtml(archived.join(', ') || 'None')}</span></div><div class="helper-copy">Best flow now: try Start Browser first. If the managed browser gets stuck on login, OAuth, or gateway pages, load the unpacked extension bridge from the path above in your normal browser, keep one logged-in thinkorswim tab open, then click Analyze again.</div>`;
     }
     function kvRows(entries) {
       if (!entries || !Object.keys(entries).length) { return '<div class="muted small">Not available yet.</div>'; }
@@ -340,6 +351,19 @@ def build_index_html() -> str:
     }
     async function loadSettings() { settingsCache = await fetchJson('/api/settings'); return settingsCache; }
     async function loadRunState() { return fetchJson('/api/run-state'); }
+    async function waitForRunCompletion(timeoutMs = 30000) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const payload = await loadRunState();
+        const state = payload.run_state || {};
+        state.manual_session_status = payload.manual_session_status || {};
+        if (state.status === 'completed' || state.status === 'failed' || state.latest_scan_id) {
+          return payload;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 750));
+      }
+      return loadRunState();
+    }
     function buildSettingsFields(settings) {
       const editable = settings.editable_settings;
       const groups = [
@@ -350,14 +374,14 @@ def build_index_html() -> str:
         ['Scoring Weights', 'scoring', [['trend_alignment', 'Trend alignment weight'], ['squeeze_quality', 'Squeeze quality weight'], ['breakout_impulse', 'Breakout impulse weight'], ['path_quality', 'Path quality weight'], ['trap_risk_penalty', 'Trap-risk penalty weight']]],
       ];
         return groups.map(([title, key, fields]) => `<div class="card"><h3>${title}</h3>${fields.map(([fieldKey, label]) => `<div style="margin-top:10px;"><label>${label}</label><input data-settings-group="${key}" data-settings-key="${fieldKey}" value="${editable[key][fieldKey] ?? ''}"></div>`).join('')}</div>`).join('')
-          + `<div class="card"><h3>Source Layer</h3><div class="small muted">The old multi-source controls are hidden from the app while you decide the single source the program should use next.</div><div class="summary-stack"><div class="summary-line"><strong>Status</strong><span>Paused</span></div><div class="summary-line"><strong>Current program</strong><span>${escapeHtml(settings.source_program?.label || 'Source Pending')}</span></div></div><div style="margin-top:10px;"><label>Public webhook URL</label><input id="settings-public-webhook-url" value="${settings.public_webhook_url ?? ''}" placeholder="https://your-public-endpoint.example/webhook"></div><div class="helper-copy">Only the public URL field remains visible because it is harmless to keep around while source decisions are deferred.</div><div class="footer-note">Override file: ${escapeHtml(settings.override_path || 'Not configured')}</div></div>`;
+          + `<div class="card"><h3>thinkorswim Web Source</h3><div class="small muted">This is the only active live source. Use a persistent visible browser so you can log in once and keep the session open.</div><div style="margin-top:10px;"><label>Browser base URL</label><input id="settings-browser-thinkorswim-base-url" value="${escapeHtml(settings.source_settings?.browser?.thinkorswim?.base_url || 'https://trade.thinkorswim.com/')}"></div><div style="margin-top:10px;"><label>Profile directory</label><input id="settings-browser-thinkorswim-profile-dir" value="${escapeHtml(settings.source_settings?.browser?.thinkorswim?.profile_dir || 'data/browser_profiles/thinkorswim_web')}"></div><div class="settings-grid" style="margin-top:10px;"><div><label>Page load timeout (ms)</label><input id="settings-browser-thinkorswim-page-load-timeout-ms" value="${escapeHtml(String(settings.source_settings?.browser?.thinkorswim?.page_load_timeout_ms || 20000))}"></div><div><label>Settle wait (ms)</label><input id="settings-browser-thinkorswim-settle-wait-ms" value="${escapeHtml(String(settings.source_settings?.browser?.thinkorswim?.settle_wait_ms || 2000))}"></div></div><div style="margin-top:10px;"><label><input id="settings-browser-persist-screenshots" type="checkbox" style="width:auto;" ${settings.source_settings?.browser?.persist_screenshots !== false ? 'checked' : ''}> Save screenshots</label></div><div style="margin-top:10px;"><label>Screenshot directory</label><input id="settings-browser-screenshot-dir" value="${escapeHtml(settings.source_settings?.browser?.screenshot_dir || 'out/browser_artifacts')}"></div><div style="margin-top:10px;"><label><input id="settings-browser-thinkorswim-keep-open" type="checkbox" style="width:auto;" ${settings.source_settings?.browser?.thinkorswim?.keep_browser_open !== false ? 'checked' : ''}> Keep browser open between runs</label></div><div style="margin-top:10px;"><label><input id="settings-browser-thinkorswim-launch-on-startup" type="checkbox" style="width:auto;" ${settings.source_settings?.browser?.thinkorswim?.launch_on_startup ? 'checked' : ''}> Launch browser when app starts</label></div><div style="margin-top:10px;"><label>Public webhook URL</label><input id="settings-public-webhook-url" value="${settings.public_webhook_url ?? ''}" placeholder="https://your-public-endpoint.example/webhook"></div><div class="helper-copy">No hidden bot mode is used here. The app reuses a normal visible browser profile.</div><div class="footer-note">Override file: ${escapeHtml(settings.override_path || 'Not configured')}</div></div>`;
     }
     function renderAnalyzeModeOptions(settings) {
       const select = document.getElementById('analyze-source-mode');
       if (!select) { return; }
       const modes = settings.analyze_modes || [];
       select.innerHTML = modes.map((mode) => `<option value="${escapeHtml(mode.value)}" ${mode.disabled ? 'disabled' : ''}>${escapeHtml(mode.label)}</option>`).join('');
-      select.value = settings.source_program?.mode || 'pending_source';
+      select.value = settings.source_program?.mode || 'thinkorswim_web';
     }
     function currentSettingsPayload() {
       const editable = { trend_filter: {}, compression: {}, breakout_trigger: {}, trap_risk: {}, scoring: {} };
@@ -366,7 +390,29 @@ def build_index_html() -> str:
         editable_settings: editable,
         public_webhook_url: document.getElementById('settings-public-webhook-url')?.value || null,
         clear_twelvedata_key: clearTwelveDataRequested,
-        source_settings: {},
+        source_settings: {
+          source_preferences: {
+            default_mode: 'thinkorswim_web',
+            webhook_fallback_enabled: false,
+            browser_fallback_enabled: true,
+            ocr_fallback_enabled: false,
+          },
+          browser: {
+            provider: 'thinkorswim',
+            headless: false,
+            persist_screenshots: !!document.getElementById('settings-browser-persist-screenshots')?.checked,
+            screenshot_dir: document.getElementById('settings-browser-screenshot-dir')?.value || 'out/browser_artifacts',
+            thinkorswim: {
+              enabled: true,
+              base_url: document.getElementById('settings-browser-thinkorswim-base-url')?.value || 'https://trade.thinkorswim.com/',
+              profile_dir: document.getElementById('settings-browser-thinkorswim-profile-dir')?.value || 'data/browser_profiles/thinkorswim_web',
+              page_load_timeout_ms: Number(document.getElementById('settings-browser-thinkorswim-page-load-timeout-ms')?.value || 20000),
+              settle_wait_ms: Number(document.getElementById('settings-browser-thinkorswim-settle-wait-ms')?.value || 2000),
+              keep_browser_open: !!document.getElementById('settings-browser-thinkorswim-keep-open')?.checked,
+              launch_on_startup: !!document.getElementById('settings-browser-thinkorswim-launch-on-startup')?.checked,
+            },
+          },
+        },
       };
       }
     async function renderHome() {
@@ -376,26 +422,28 @@ def build_index_html() -> str:
       const records = recentPayload.records || [];
       const homeBody = document.getElementById('home-body');
       if (!records.length) {
-        homeBody.innerHTML = `<div class="hero"><h2>No live records yet</h2><p class="muted">This workspace is ready, but live source integrations are paused until the next single source is chosen. Start with Live Analysis if you want to see the current source status, or use saved records if any exist later.</p><div class="button-row"><button class="action" id="home-open-live">Open Live Analysis</button><button class="ghost" id="home-open-settings">Open Strategy Settings</button></div></div>`;
+        homeBody.innerHTML = `<div class="hero"><h2>No live records yet</h2><p class="muted">Start with the managed thinkorswim browser. If that session gets stuck, load the stocknogs browser extension bridge in your normal logged-in thinkorswim tab, then use Live Analysis to request symbols from that live session.</p><div class="button-row"><button class="action" id="home-open-live">Open Live Analysis</button><button class="ghost" id="home-open-settings">Open Strategy Settings</button></div></div>`;
         document.getElementById('home-open-live').onclick = () => setPage('live');
         document.getElementById('home-open-settings').onclick = () => setPage('settings');
         return;
       }
-      homeBody.innerHTML = `<div class="grid two-col"><div class="card"><h2>Latest analyses</h2><div class="grid">${records.slice(0, 4).map((record) => renderCompactCard(record)).join('')}</div></div><div class="card"><h2>Next step</h2><div class="helper-copy">The source layer is paused, so the useful next step is to review saved records and keep the strategy thresholds clean while the replacement source is chosen.</div><ol class="helper-list"><li>Open Analysis Detail for the best saved record.</li><li>Check whether the setup is usable now.</li><li>Review the timeframe story and action card.</li><li>Choose the next single live source before resuming fresh analysis.</li></ol></div></div>`;
+      homeBody.innerHTML = `<div class="grid two-col"><div class="card"><h2>Latest analyses</h2><div class="grid">${records.slice(0, 4).map((record) => renderCompactCard(record)).join('')}</div></div><div class="card"><h2>Next step</h2><div class="helper-copy">Keep the thinkorswim browser running, then use Live Analysis for the next requested symbol. Open Analysis Detail when you want the full explanation and missing-context story.</div><ol class="helper-list"><li>Make sure the thinkorswim browser is running.</li><li>Analyze a ticker from the live page session.</li><li>Check whether the setup is usable now.</li><li>Open Analysis Detail for the fuller reasoning.</li></ol></div></div>`;
       document.querySelectorAll('[data-scan-id]').forEach((element) => { element.onclick = () => loadDetail(element.dataset.scanId); });
     }
     async function renderLiveSignals() {
       const payload = await fetchJson('/api/recent');
       const records = payload.records || [];
       const container = document.getElementById('live-signals');
-      if (!records.length) { container.innerHTML = '<div class="empty-state">No saved analysis records yet. Live source integrations are paused until the next single source is chosen.</div>'; return; }
+      if (!records.length) { container.innerHTML = '<div class="empty-state">No saved analysis records yet. Start the thinkorswim web browser and run an analysis to create one.</div>'; return; }
       container.innerHTML = records.map((record) => renderCompactCard(record)).join('');
       document.querySelectorAll('#live-signals [data-scan-id]').forEach((element) => { element.onclick = () => loadDetail(element.dataset.scanId); });
     }
     async function renderRunStatus() {
       const payload = await loadRunState();
       const panel = document.getElementById('run-status-panel');
-      if (panel) { panel.innerHTML = renderRunState(payload.run_state || {}); }
+      const state = payload.run_state || {};
+      state.manual_session_status = payload.manual_session_status || {};
+      if (panel) { panel.innerHTML = renderRunState(state); }
     }
     function detailSection(title, body) { return `<details class="collapsible" open><summary>${title}</summary><div class="kv">${body}</div></details>`; }
     async function loadDetail(scanId) {
@@ -458,7 +506,13 @@ def build_index_html() -> str:
       document.getElementById('settings-form').innerHTML = buildSettingsFields(settings);
       renderAnalyzeModeOptions(settings);
       const sourceProgramPanel = document.getElementById('source-program-panel');
-      if (sourceProgramPanel) { sourceProgramPanel.innerHTML = renderSourceProgramStatus(settings); }
+      if (sourceProgramPanel) {
+        sourceProgramPanel.innerHTML = renderSourceProgramStatus(settings);
+        const startButton = document.getElementById('source-browser-start');
+        const stopButton = document.getElementById('source-browser-stop');
+        if (startButton) { startButton.onclick = startSourceBrowser; }
+        if (stopButton) { stopButton.onclick = stopSourceBrowser; }
+      }
     }
     function clearCurrentSelection() {
       selectedScanId = null;
@@ -493,6 +547,35 @@ def build_index_html() -> str:
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ symbol, source_mode: sourceMode }),
         });
+        let finalResponse = response;
+        if (response.status === 'queued') {
+          const runPayload = await waitForRunCompletion();
+          const runState = runPayload.run_state || {};
+          if (runState.latest_scan_id) {
+            finalResponse = { record: { scan_id: runState.latest_scan_id } };
+          }
+        }
+        await renderRunStatus();
+        await refreshAll();
+        if (finalResponse.record && finalResponse.record.scan_id) { await loadDetail(finalResponse.record.scan_id); }
+      } catch (error) {
+        await renderRunStatus();
+        console.error(error);
+      } finally {
+        stopRunStatePolling();
+      }
+    }
+    async function submitManualSession() {
+      const raw = document.getElementById('manual-session-payload').value.trim();
+      if (!raw) { return; }
+      startRunStatePolling();
+      try {
+        const payload = JSON.parse(raw);
+        const response = await fetchJson('/api/manual-session/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
         await renderRunStatus();
         await refreshAll();
         if (response.record && response.record.scan_id) { await loadDetail(response.record.scan_id); }
@@ -501,6 +584,34 @@ def build_index_html() -> str:
         console.error(error);
       } finally {
         stopRunStatePolling();
+      }
+    }
+    async function startSourceBrowser() {
+      try {
+        const payload = await fetchJson('/api/source-program/start-browser', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        await refreshAll();
+        if (payload.message) { alert(payload.message); }
+      } catch (error) {
+        await refreshAll();
+        alert(String(error.message || error));
+      }
+    }
+    async function stopSourceBrowser() {
+      try {
+        const payload = await fetchJson('/api/source-program/stop-browser', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        await refreshAll();
+        if (payload.message) { alert(payload.message); }
+      } catch (error) {
+        await refreshAll();
+        alert(String(error.message || error));
       }
     }
     async function submitReplay() {
@@ -560,6 +671,7 @@ def build_index_html() -> str:
     document.getElementById('settings-reset').onclick = resetSettings;
     if (document.getElementById('settings-demo')) { document.getElementById('settings-demo').onclick = loadDemoPreset; }
     document.getElementById('analyze-submit').onclick = analyzeTicker;
+    document.getElementById('submit-manual-session').onclick = submitManualSession;
     document.getElementById('open-latest-result').onclick = openLatestResult;
     document.getElementById('clear-current-selection').onclick = clearCurrentSelection;
     loadSettings().then((settings) => {

@@ -1,6 +1,6 @@
 # stocknogs
 
-A local multi-timeframe chart-analysis companion for liquid US stocks. The app combines structured live market data, fresh TradingView webhook events, and a local GUI to build a deterministic thesis with bias, confidence, setup status, targets when available, invalidation, and clear diagnostics.
+A local multi-timeframe chart-analysis companion for liquid US stocks. The current app is intentionally narrowed to one live source: your real logged-in `thinkorswim web` tab with a small helper script running inside it.
 
 ## Product Concept
 
@@ -36,26 +36,19 @@ Notes:
 - The updater force-syncs an existing `stocknogs` git checkout to the latest remote `main`.
 - If `Desktop\stocknogs` exists but is not the expected repo, the updater moves it aside into a timestamped backup and clones fresh.
 
-## Source Priority and Fallback
+## Current Live Source
 
-Source selection is explicit and diagnostics-first.
+The only active live source in the app is:
 
-Priority order:
+1. `thinkorswim web` via a persistent visible Playwright browser session
 
-1. Structured live OHLCV and indicator-ready data
-2. Fresh TradingView webhook events
-3. Browser extraction fallback
-4. OCR/screen-read fallback
-5. Clear diagnostic failure if nothing usable is available
+Current behavior:
 
-Current Phase 1 implementation:
-
-- Twelve Data and Yahoo style structured OHLCV providers remain available
-- TradingView webhook payloads normalize into the same internal snapshot model
-- Browser extraction is available as a bounded Playwright fallback for explicit supported page patterns
-- Source, fallback chain, freshness, latency, and missing-field diagnostics are attached to records
-- OCR screen-read fallback now has a bounded foundation for visible ticker, timeframe, and price extraction only
-- OCR does not fabricate OHLCV bars or hidden higher-timeframe context
+- you start a stocknogs-managed thinkorswim browser window
+- you log in manually there once
+- stocknogs requests ticker switches through that managed browser and reads selector-based DOM data directly
+- if browser automation is unavailable or page policies block helper callbacks, you can still paste selector JSON into the manual-session box as a fallback
+- older sources remain archived in code, but are not active in the GUI flow
 
 ## Twelve Data Environment Variable Setup
 
@@ -73,22 +66,24 @@ Notes:
 
 ## Run the GUI
 
-Start the local tester GUI:
+Use the root launcher:
 
 ```powershell
-python scripts/run_gui.py
+.\start_stocknogs.bat
 ```
 
-Open:
+The launcher automatically tries local ports `8080`, `8090`, `8100`, then `8180`, and prints the working URL.
+
+Open the printed URL, for example:
 
 ```text
-http://127.0.0.1:8080/
+http://127.0.0.1:8090/
 ```
 
 The GUI serves both the tester interface and the webhook endpoint:
 
 ```text
-http://127.0.0.1:8080/webhook
+http://127.0.0.1:8090/webhook
 ```
 
 GUI notes:
@@ -96,14 +91,12 @@ GUI notes:
 - Record history is loaded from the GUI JSONL log on startup.
 - Local setting changes are stored in `config/gui_user.yaml` by default.
 - Local live-source settings are stored separately in `config/gui_sources.yaml`.
-- The GUI remains Python-only and reuses the same webhook, scoring, explanation, snapshot, thesis, and logging backend paths.
+- The GUI remains Python-only and reuses the same scoring, explanation, snapshot, thesis, and logging backend paths.
 - The interface prioritizes simple summaries first and advanced technical details second.
 - Analysis Detail leads with user-readable action summaries, target/invalidation guidance, confidence explanations, and timeframe story before exposing engine-shaped technical output.
-- The Live Analysis page includes an `Analyze Ticker` control, source-mode selection, and a run-status panel that shows source path, coverage, fallback chain, and readable failure messages while a run is happening.
-- The GUI now separates `Live data`, `Fresh TradingView alert`, and `Stored TradingView alert` results so stale event input is not mistaken for current structured live market analysis.
-- Browser-extracted results are clearly labeled and remain lower-trust than structured live data.
-- Screen-read fallback is shown as a bounded OCR fallback only. It is honest about what it can and cannot read.
-- Users can save, clear, and test their own Twelve Data API key from the GUI settings page.
+- The Live Analysis page includes `Analyze`, a run-status panel, and a manual JSON fallback box.
+- The run-status panel now shows the helper heartbeat, last helper event, and helper-side errors.
+- Browser-extracted results are clearly labeled as browser-derived visible-page context.
 
 ## GUI Workflow
 
@@ -113,42 +106,54 @@ Visible GUI pages:
 2. Live Analysis
 3. Analysis Detail
 4. Strategy Settings
-5. TradingView Setup
-6. History
-7. Diagnostics
+5. History
+6. Diagnostics
 
 Recommended tester flow:
 
-1. Run `python scripts/run_gui.py`.
-2. Open `Live Analysis`, enter a ticker, choose a source mode, and click `Analyze`.
-3. Watch the run-status panel to see the requested source, source actually used, fallback chain, coverage, and failures if any.
-4. Open `Analysis Detail` to inspect the readable summary, source path, detailed analysis, and advanced diagnostics.
-5. Review `History` to confirm persistence across sessions.
-6. Open `TradingView Setup` when you are ready to connect a public webhook URL.
+1. Run `.\start_stocknogs.bat`.
+2. Open `Live Analysis`.
+3. Click `Start Browser`.
+4. Log into thinkorswim in that stocknogs-managed browser window.
+5. If the managed browser gets stuck on login, OAuth, or gateway pages, load the unpacked extension from `extensions/stocknogs_thinkorswim_bridge` in your normal browser instead.
+6. Keep one normal logged-in thinkorswim tab open when using the extension bridge.
+7. Enter a ticker and click `Analyze`.
+8. Watch `Run Status` for browser state, bridge/helper status, current step, and final result state.
+9. Open `Analysis Detail` to inspect the readable summary, source path, detailed analysis, and advanced diagnostics.
+10. Review `History` to confirm persistence across sessions.
+
+Browser extension bridge workflow:
+
+1. Open your browser's extensions page.
+2. Turn on `Developer mode`.
+3. Choose `Load unpacked`.
+4. Select `extensions/stocknogs_thinkorswim_bridge`.
+5. Open the extension popup and click `Auto-detect` if the stocknogs base URL is empty.
+6. Keep `Bridge enabled` on.
+7. Open thinkorswim web in that same browser and log in.
+8. Leave one thinkorswim tab open.
+9. Click `Analyze` in stocknogs.
+
+Manual-session helper workflow:
+
+1. Keep thinkorswim open in your normal logged-in browser tab.
+2. Open [`scripts/thinkorswim_manual_session_helper.js`](./scripts/thinkorswim_manual_session_helper.js).
+3. Run that script from DevTools Console on the thinkorswim page only if you are not using the extension bridge.
+4. If the page blocks localhost callbacks, run `stocknogsExtractManualPayload("SPY")` in the console with your symbol.
+5. Paste the emitted JSON into `Live Analysis -> Manual Session Payload`.
+6. Click `Submit Session JSON`.
+
+Manual JSON fallback:
+
+1. Paste selector-based JSON into `Live Analysis -> Manual Session Payload`.
+2. Click `Submit Session JSON`.
+3. This bypasses the live helper switch flow and analyzes the pasted selector payload directly.
 
 Settings workflow:
 
 1. Open `Strategy Settings`.
-2. Paste your Twelve Data API key into the live-source section.
-3. Click `Test connection` to validate the key.
-4. Save settings locally.
-5. Choose the default source mode and whether Auto may use webhook and OCR fallback.
-
-Source modes in the GUI:
-
-- `auto`: tries live structured data first, then fresh stored webhook payloads if available, then bounded browser extraction, then bounded OCR fallback if configured; it does not fall back to replay/demo records
-- `twelvedata`: runs direct live analysis from Twelve Data only
-- `webhook`: reuses only fresh already received TradingView webhook records for the requested symbol
-- `browser`: opens a supported public page and extracts only what is visibly available from that page
-- `ocr`: bounded screen-read fallback for visible ticker, timeframe, and price extraction only
-
-Source preferences:
-
-- default analyze mode can be set per user
-- Auto can allow or disallow:
-  - fresh TradingView webhook fallback
-  - OCR screen-read fallback
-- the saved Twelve Data key is masked in normal settings responses after save
+2. Confirm the thinkorswim base URL and profile settings if you still use the archived persistent-browser path for debugging.
+3. Save settings locally.
 
 ## OCR Screen-Read Fallback
 
@@ -221,26 +226,6 @@ Possible results:
 The main GUI shows a readable result first. Technical warnings remain available through diagnostics when needed.
 
 Internal replay/testing paths still exist for development and automated tests, but they are not part of the normal end-user GUI flow.
-
-## Project Update Summaries
-
-Use this helper whenever you finish a change and want a timestamped summary file:
-
-```powershell
-python scripts/log_update.py --title "Home page search improvements" --summary "Added ticker search, price summary, and quick charts to Home." --detail "Added /api/search-symbol endpoint." --detail "Added Home search panel UI and sparkline charts."
-```
-
-What it does:
-
-- Creates a new file in `docs/updates/` named like `2026-04-05_153210_home-page-search-improvements.md`
-- Appends that file to `docs/updates/INDEX.md`
-- Auto-detects changed files from git status when a git repo is available
-
-If you want to list files manually:
-
-```powershell
-python scripts/log_update.py --title "Refactor scanner flow" --summary "Split runner orchestration into smaller steps." --changed-file "src/scanner/runner.py" --changed-file "tests/unit/test_runner.py" --no-auto-files
-```
 
 Run a single fixture-backed scan from the command line:
 
@@ -376,3 +361,6 @@ The next implementation phase should add:
 - target / invalidation engine
 - richer thesis detail views in the GUI
 - deeper diagnostics for preset scoring and failure reasons
+#   D A A A A A C K S  
+ #   D A A A A A C K S  
+ 

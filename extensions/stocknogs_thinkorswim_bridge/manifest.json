@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "stocknogs thinkorswim bridge",
+  "version": "0.1.0",
+  "description": "Bridge a normal logged-in thinkorswim web tab back to stocknogs without using DevTools console fetch calls.",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://trade.thinkorswim.com/*",
+    "https://*.thinkorswim.com/*",
+    "https://*.schwab.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "stocknogs bridge",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://trade.thinkorswim.com/*",
+        "https://*.thinkorswim.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

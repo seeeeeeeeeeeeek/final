@@ -4,6 +4,7 @@ from unittest.mock import patch
 from src.services.browser_source import (
     BrowserExtractionResult,
     BrowserSourceManager,
+    ThinkorswimWebAdapter,
     TradingViewChartAdapter,
     YahooFinanceQuoteAdapter,
 )
@@ -102,6 +103,119 @@ class _FakeTradingViewPage:
         raise RuntimeError(f"selector unavailable: {selector}")
 
 
+class _FakeThinkorswimLocator:
+    def __init__(self, page, selector: str) -> None:
+        self.page = page
+        self.selector = selector
+        self.first = self
+
+    def wait_for(self, *, state: str, timeout: int) -> None:
+        assert state == "visible"
+        assert timeout > 0
+        if not self.page.selector_available(self.selector):
+            raise RuntimeError(f"selector unavailable: {self.selector}")
+
+    def text_content(self, timeout: int | None = None) -> str:
+        _ = timeout
+        return self.page.text_for(self.selector)
+
+    def click(self) -> None:
+        self.page.clicked_selectors.append(self.selector)
+
+    def fill(self, value: str) -> None:
+        self.page.current_symbol = value.upper()
+
+    def press(self, key: str) -> None:
+        assert key == "Enter"
+        self.page.enter_presses += 1
+
+
+class _FakeThinkorswimPage:
+    def __init__(self, *, recover_to_app: bool = True, initial_state: str = "oauth") -> None:
+        self.url = "https://trade.thinkorswim.com/oauth?code=demo" if initial_state == "oauth" else "https://trade.thinkorswim.com/"
+        self.recover_to_app = recover_to_app
+        self.initial_state = initial_state
+        self.current_symbol = "ACCOUNTSUMMARY"
+        self.current_price = "655.87"
+        self.clicked_selectors: list[str] = []
+        self.enter_presses = 0
+        self.goto_history: list[str] = []
+
+    def goto(self, url: str, *, wait_until: str, timeout: int | None = None) -> None:
+        assert wait_until == "domcontentloaded"
+        assert timeout and timeout > 0
+        self.goto_history.append(url)
+        self.url = url
+
+    def wait_for_timeout(self, timeout: int) -> None:
+        assert timeout > 0
+
+    def title(self) -> str:
+        if self.url == "https://trade.thinkorswim.com/":
+            if self.initial_state == "bad_gateway" and not self.goto_history:
+                return ""
+            if self.recover_to_app:
+                return "All Account Positions | thinkorswim Web"
+            return "thinkorswim Web Login | Charles Schwab"
+        return "OAuth redirect"
+
+    def locator(self, selector: str) -> _FakeThinkorswimLocator:
+        if not self.selector_available(selector):
+            raise RuntimeError(f"selector unavailable: {selector}")
+        return _FakeThinkorswimLocator(self, selector)
+
+    def selector_available(self, selector: str) -> bool:
+        if selector == "body":
+            return True
+        if self.url != "https://trade.thinkorswim.com/" or not self.recover_to_app:
+            return False
+        visible_selectors = {
+            '#navigation-symbol-search',
+            'input#navigation-symbol-search[aria-label="Find a symbol"]',
+            'div[data-testid="navigation-symbol-search"] input[aria-label="Find a symbol"]',
+            '#main-header > div.left.center-align > div.symbol-search input#navigation-symbol-search',
+            '#main-header > div.left.center-align > div.symbol-search input[placeholder*="Find a Symbol"]',
+            'form#navigation-symbol-search-form input[role="combobox"]',
+            'input[placeholder*="Find a Symbol"]',
+            'input[placeholder*="Symbol"]',
+            'input[type="search"]',
+            f'text="{self.current_symbol}"',
+            '.quote-price',
+            "h1",
+            "h2",
+        }
+        return selector in visible_selectors
+
+    def text_for(self, selector: str) -> str:
+        if selector == "body":
+            if self.initial_state == "bad_gateway" and self.url == "https://trade.thinkorswim.com/" and not self.goto_history:
+                return "502 Bad Gateway: Registered endpoint failed to handle the request."
+            if self.url == "https://trade.thinkorswim.com/" and self.recover_to_app:
+                return "All Account Positions"
+            if self.url == "https://trade.thinkorswim.com/" and not self.recover_to_app:
+                return "Log in to thinkorswim Web"
+            return "404 Not Found: Requested route ('tosweb.schwab.com') does not exist."
+        if selector == f'text="{self.current_symbol}"':
+            return self.current_symbol
+        if selector in {
+            '#navigation-symbol-search',
+            'input#navigation-symbol-search[aria-label="Find a symbol"]',
+            'div[data-testid="navigation-symbol-search"] input[aria-label="Find a symbol"]',
+            '#main-header > div.left.center-align > div.symbol-search input#navigation-symbol-search',
+            '#main-header > div.left.center-align > div.symbol-search input[placeholder*="Find a Symbol"]',
+            'form#navigation-symbol-search-form input[role="combobox"]',
+            'input[placeholder*="Find a Symbol"]',
+            'input[placeholder*="Symbol"]',
+            'input[type="search"]',
+        }:
+            return self.current_symbol
+        if selector == ".quote-price":
+            return self.current_price
+        if selector in {"h1", "h2"}:
+            return "All Account Positions"
+        raise RuntimeError(f"selector unavailable: {selector}")
+
+
 class _FakeBrowser:
     def __init__(self, *, fail_new_page: bool = False) -> None:
         self.fail_new_page = fail_new_page
@@ -196,6 +310,46 @@ def test_tradingview_adapter_warns_when_region_screenshot_fails(tmp_path: Path) 
     result = adapter.extract(_FakeTradingViewPage(tmp_path, fail_region="time_axis"), symbol="SPY")
     assert result.ok is True
     assert any("time axis screenshot" in warning.lower() for warning in result.warnings)
+
+
+def test_thinkorswim_adapter_recovers_from_broken_oauth_page() -> None:
+    adapter = ThinkorswimWebAdapter(persist_screenshots=False, settle_wait_ms=1)
+    page = _FakeThinkorswimPage(recover_to_app=True)
+
+    result = adapter.extract(page, symbol="SPY")
+
+    assert result.ok is True
+    assert result.symbol_detected == "SPY"
+    assert result.latest_visible_price == 655.87
+    assert result.selector_debug["page_recovery"] == "OAuth callback page"
+    assert any("reopened the main trading page from the OAuth callback page" in warning for warning in result.warnings)
+    assert page.goto_history == ["https://trade.thinkorswim.com/"]
+    assert page.enter_presses == 1
+
+
+def test_thinkorswim_adapter_reports_login_page_after_recovery_attempt() -> None:
+    adapter = ThinkorswimWebAdapter(persist_screenshots=False, settle_wait_ms=1)
+    page = _FakeThinkorswimPage(recover_to_app=False)
+
+    result = adapter.extract(page, symbol="SPY")
+
+    assert result.ok is False
+    assert result.errors == ["Log into the stocknogs-managed thinkorswim browser first, then run Analyze again."]
+    assert result.selector_debug["page_recovery"] == "login page"
+    assert any("login page" in warning.lower() for warning in result.warnings)
+
+
+def test_thinkorswim_adapter_recovers_from_bad_gateway_page() -> None:
+    adapter = ThinkorswimWebAdapter(persist_screenshots=False, settle_wait_ms=1)
+    page = _FakeThinkorswimPage(recover_to_app=True, initial_state="bad_gateway")
+
+    result = adapter.extract(page, symbol="SPY")
+
+    assert result.ok is True
+    assert result.symbol_detected == "SPY"
+    assert result.selector_debug["page_recovery"] == "error page"
+    assert any("error page" in warning.lower() for warning in result.warnings)
+    assert page.goto_history == ["https://trade.thinkorswim.com/"]
 
 
 def test_browser_source_manager_reports_missing_playwright_cleanly() -> None:

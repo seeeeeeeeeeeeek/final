@@ -1,4 +1,4 @@
-# Project Summary
+﻿# Project Summary
 
 This file is the cleaned chronological summary of `stocknogs` from the original repository foundation through the current state.
 
@@ -486,23 +486,52 @@ As of the current checkpoint, the project now has:
 
 ## 15. Current Source Program State
 
-The app no longer exposes the previous multi-source hierarchy in the active GUI workflow.
+The app now exposes exactly one active source in the GUI workflow:
 
-The previous source paths have been intentionally archived from the product surface:
+- `thinkorswim web`
+
+The current preferred live source path is implemented through the user's real thinkorswim browser tab, with the browser extension bridge now acting as the main practical link:
+
+- the user opens and logs into thinkorswim web manually in a normal browser
+- an unpacked local extension bridge runs in that browser
+- stocknogs queues ticker-switch requests for the live thinkorswim tab
+- the extension bridge switches symbols and reads selector-based DOM values from the visible page
+- selector payloads are reported back locally without relying on DevTools-page `fetch` calls to localhost
+
+The repo now also includes a manual-session helper path for the same source:
+
+- a small in-page helper script can run inside a real logged-in thinkorswim tab
+- it extracts selector-based DOM values
+- it can either report selector data back automatically or provide pasted JSON fallback data
+- helper heartbeat, last event, and helper-side errors now surface in the GUI run-status area
+
+Important practical note:
+
+- thinkorswim web blocks direct localhost callbacks from DevTools-pasted helper code in real sessions because of page Content Security Policy
+- because of that, the extension bridge is now the primary recommended connection path for a normal logged-in browser tab
+- the manual helper remains useful as a fallback for selector capture and pasted JSON
+
+The repo also contains a managed persistent-browser path for thinkorswim:
+
+- Playwright-backed launch and recovery logic was added
+- thread-safety issues were hardened with a dedicated browser worker-thread model
+- login/OAuth/404/502 recovery was partially hardened
+- in practice, this path still remains less reliable than the extension bridge on real local sessions
+
+The older source paths are still archived from the active product surface:
 
 - Twelve Data structured live
 - Yahoo structured live / quote fallback
 - TradingView webhook reuse
-- browser extraction
 - OCR / screen-read fallback
-
-This was done to keep the product narrow while a single replacement source is chosen.
 
 Important boundary:
 
-- the code for those integrations still exists in the repo
-- the app UI no longer presents them as active choices
-- the analyze endpoint now fails clearly instead of silently trying old source paths
+- no headless stealth mode is used for the active source
+- no login automation is used for the active source
+- the active source is bounded browser extraction from a real visible thinkorswim web session
+- local startup has been simplified to a single root launcher: `start_stocknogs.bat`
+- the launcher now retries a short local port list automatically when `8080` is unavailable
 
 ## 16. What Is Working Right Now
 
@@ -514,8 +543,13 @@ As of now, the project can legitimately do all of the following:
 - show simple summary-first GUI views
 - inspect saved records and detail views
 - track run status and failure reasons
+- show helper heartbeat and helper debug events for the manual thinkorswim session
 - keep strategy threshold settings editable
-- clearly report that no live source is currently active
+- load a local browser extension bridge for thinkorswim web
+- queue symbol-switch commands from stocknogs into a real logged-in thinkorswim tab
+- analyze symbols from the visible thinkorswim web session with bounded browser-derived selector context
+- read visible symbol, visible price, and visible timeframe text from the live thinkorswim page when matching selectors are present
+- record selector-debug metadata so real-session hardening can continue without guessing
 
 ## 17. What Is Still Intentionally Unsupported
 
@@ -535,13 +569,15 @@ The following are still intentionally out of scope or bounded:
 
 ## 18. What Still Needs Focus
 
-The immediate focus is no longer source expansion. It is source selection discipline.
+The immediate focus is no longer source selection. It is source hardening for the single chosen source.
 
 Main follow-up areas:
 
-- choose the single live source that should remain in V1
-- reintroduce only that one source into the GUI and analyze flow
-- keep provenance and trust labeling explicit when the replacement source is wired in
+- validate the thinkorswim selectors against real logged-in sessions and chart views
+- finish multi-timeframe switching for the required V1 set: Daily, 1H, 5m
+- improve symbol, price, and timeframe extraction only where live validation proves necessary
+- wire visible OHLC / chart-info row extraction from the thinkorswim chart page
+- keep provenance and trust labeling explicit for browser-derived context
 - avoid restoring the old fallback ladder unless there is explicit scope approval
 - continue simplifying user-facing source trust and missing-context language
 
@@ -549,12 +585,75 @@ Main follow-up areas:
 
 The best next step after this checkpoint is:
 
-1. choose the single source the product should use
-2. wire only that source back into the GUI and analyze path
-3. keep the archived integrations off the active surface unless scope is explicitly widened later
+1. validate the extension-bridge flow on the exact thinkorswim chart screens you actually use
+2. finish the selector path for switching and reading the required V1 timeframes: Daily, 1H, 5m
+3. wire visible chart OHLC/info extraction before widening anything else
+4. keep the archived integrations and unreliable managed-browser path off the active surface unless explicitly revisited later
 
-That preserves a narrower V1 and prevents the app from drifting back into a confusing multi-source product.
+That preserves a narrower V1 and keeps the app from drifting back into a confusing multi-source product.
 
 ## 20. One-Sentence Summary
 
-`stocknogs` began as a deterministic breakout scanner and is now temporarily source-neutral at the product surface so the next iteration can reintroduce one deliberate live source instead of maintaining a confusing multi-source stack.
+`stocknogs` began as a deterministic breakout scanner and now runs a single-source product surface centered on a real logged-in thinkorswim web session, with a local browser extension bridge feeding bounded selector-based chart context back into the app.
+
+## 21. Latest Thinkorswim Hardening Checkpoint
+
+The latest hardening pass clarified what is truly working and what is still missing for the real V1 workflow.
+
+### 21.1 Connection-path reality
+
+The live findings were:
+
+- DevTools helper auto-callbacks to `127.0.0.1` are blocked by thinkorswim page Content Security Policy
+- the managed persistent-browser flow can still get stuck on login, OAuth callback, `404`, or `502` pages
+- the extension bridge running in the user's normal logged-in browser is currently the most reliable live path
+
+### 21.2 Selector findings now confirmed
+
+Real-session selector validation has now confirmed:
+
+- symbol search input: `#navigation-symbol-search`
+- chart aggregation button family: `button[data-testid="timeframe-aggregation-dropdown-value"]`
+- minute/hour option family: `li[data-testid^="timeframe-aggregation-dropdown:"]`
+- confirmed minute/hour tokens seen live:
+  - `MIN15`
+  - `MIN30`
+  - `HOUR1`
+- daily selector family appears separately as:
+  - `li[data-testid="timeframe-range-dropdown:DAY1"]`
+
+### 21.3 What this means for V1
+
+This means the app now has enough verified live selector evidence to keep hardening the exact required V1 timeframe set:
+
+- `5m`
+- `1H`
+- `1D`
+
+It also confirms that thinkorswim is not exposing all three through one identical dropdown family, so the bridge/helper must support more than one control path.
+
+### 21.4 What is still missing
+
+The current browser-derived payload is still partial.
+
+It can already return visible values such as:
+
+- symbol
+- current visible price
+- current visible timeframe text
+- page title / page URL
+- selector-debug metadata
+
+It still does not yet return enough chart-context data to claim a full multi-timeframe breakout read, because the live chart-page extraction still needs:
+
+- reliable switching across all required timeframes
+- visible OHLC / candle-info row extraction
+- any additional visible chart metrics that are actually present on the page and can be read honestly
+
+### 21.5 Immediate next implementation target
+
+The immediate implementation target is now very narrow:
+
+1. finish real selector switching for `5m`, `1H`, and `1D`
+2. extract the visible OHLC/info row from the chart page
+3. keep the result explicitly labeled as browser-derived partial context until those fields are genuinely available

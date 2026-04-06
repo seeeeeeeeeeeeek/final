@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stocknogs bridge</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 14px;
+      width: 320px;
+      font: 14px/1.45 "Segoe UI", sans-serif;
+      color: #eef2ff;
+      background: #0b1020;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+    p {
+      margin: 0 0 10px;
+      color: #aab6d9;
+    }
+    label {
+      display: block;
+      margin: 12px 0 6px;
+      color: #cdd6f4;
+      font-weight: 600;
+    }
+    input[type="text"] {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 10px 12px;
+      color: #eef2ff;
+      background: #111827;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 12px;
+    }
+    button {
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 10px 12px;
+      color: #eef2ff;
+      background: #1f2937;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button.primary {
+      background: #2563eb;
+      border-color: #2563eb;
+    }
+    .status {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: #111827;
+      border: 1px solid #334155;
+      color: #cbd5e1;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .small {
+      font-size: 12px;
+      color: #94a3b8;
+    }
+    .toggle {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 12px;
+    }
+  </style>
+</head>
+<body>
+  <h1>stocknogs bridge</h1>
+  <p>Keep one logged-in thinkorswim tab open in this browser. The extension will poll stocknogs and switch symbols here.</p>
+  <div class="toggle">
+    <input id="bridge-enabled" type="checkbox">
+    <label for="bridge-enabled" style="margin:0;">Bridge enabled</label>
+  </div>
+  <label for="base-url">stocknogs base URL</label>
+  <input id="base-url" type="text" placeholder="http://127.0.0.1:8180">
+  <div class="row">
+    <button id="detect-base">Auto-detect</button>
+    <button id="save-settings" class="primary">Save</button>
+  </div>
+  <div id="status" class="status">Loading bridge status...</div>
+  <div class="small">Extension folder: <code>extensions/stocknogs_thinkorswim_bridge</code></div>
+  <script src="popup.js"></script>
+</body>
+</html>
