@@ -19,47 +19,8 @@
     'div[data-testid="navigation-symbol-search"]',
     'form#navigation-symbol-search-form',
   ];
-  const AGGREGATION_BUTTON_SELECTORS = [
-    'button[data-testid="timeframe-aggregation-dropdown-value"]',
-    '#price-chart-wrapper-trade-page-chart button[data-testid="timeframe-aggregation-dropdown-value"]',
-    '#price-chart-wrapper-trade-page-chart > div.sc-eeDRCY.sc-koXPp.sc-jhlPcU.kLUocn.ihXwcj.gUQVPY > div > div:nth-child(2) > div:nth-child(2) > button',
-  ];
-  const RANGE_BUTTON_SELECTORS = [
-    'button[data-testid="timeframe-range-dropdown-value"]',
-    '#price-chart-wrapper-trade-page-chart button[data-testid="timeframe-range-dropdown-value"]',
-  ];
-  const TIMEFRAME_DISPLAY_SELECTORS = [
-    'button[data-testid="timeframe-aggregation-dropdown-value"] .aggregation-dropdown__anchor-text',
-    '#price-chart-wrapper-trade-page-chart button[data-testid="timeframe-aggregation-dropdown-value"] .aggregation-dropdown__anchor-text',
-    '#price-chart-wrapper-trade-page-chart > div.sc-eeDRCY.sc-koXPp.sc-jhlPcU.kLUocn.ihXwcj.gUQVPY > div > div:nth-child(2) > div:nth-child(2) > button .aggregation-dropdown__anchor-text',
-    'button[data-testid="timeframe-range-dropdown-value"] .aggregation-dropdown__anchor-text',
-    '#price-chart-wrapper-trade-page-chart button[data-testid="timeframe-range-dropdown-value"] .aggregation-dropdown__anchor-text',
-    '[data-testid*="interval"]',
-    '[data-testid*="timeframe"]',
-    '.timeframe',
-  ];
-  const TIMEFRAME_OPTION_SELECTORS = [
-    'li[role="option"][data-testid^="timeframe-aggregation-dropdown:"]',
-    'li[role="option"][data-testid^="timeframe-range-dropdown:"]',
-  ];
-  const TIMEFRAME_TARGET_TESTIDS = {
-    '5m': ['MIN5'],
-    '15m': ['MIN15'],
-    '30m': ['MIN30'],
-    '1h': ['MIN60', 'HOUR1', 'HR1'],
-    '1d': ['DAY1', 'D1', 'DAY'],
-  };
-  const TIMEFRAME_TARGET_CONTROL = {
-    '5m': 'aggregation',
-    '15m': 'aggregation',
-    '30m': 'aggregation',
-    '1h': 'aggregation',
-    '1d': 'range',
-  };
   const SYMBOL_LOOKUP_RETRIES = 10;
   const SYMBOL_LOOKUP_WAIT_MS = 200;
-  const TIMEFRAME_LOOKUP_RETRIES = 10;
-  const TIMEFRAME_LOOKUP_WAIT_MS = 150;
   let helperBlockedNoticeShown = false;
 
   function textFrom(selectors) {
@@ -82,14 +43,6 @@
     const cleaned = String(text).replace(/[$,%(),]/g, " ").replace(/\s+/g, " ").trim();
     const match = cleaned.match(/-?\d+(?:\.\d+)?/);
     return match ? Number(match[0]) : null;
-  }
-
-  function normalizeTimeframeTarget(value) {
-    const text = String(value || '').trim().toLowerCase();
-    if (!text) return '';
-    if (text === '60m') return '1h';
-    if (text === 'day') return '1d';
-    return text;
   }
 
   function stopHelper() {
@@ -126,98 +79,6 @@
       return selector;
     }
     return "";
-  }
-
-  function timeframeButton(target) {
-    const normalized = normalizeTimeframeTarget(target);
-    const selectorGroup =
-      TIMEFRAME_TARGET_CONTROL[normalized] === 'range'
-        ? RANGE_BUTTON_SELECTORS
-        : AGGREGATION_BUTTON_SELECTORS;
-    for (const selector of selectorGroup) {
-      const node = document.querySelector(selector);
-      if (node) return { node, selector, controlKind: TIMEFRAME_TARGET_CONTROL[normalized] || 'aggregation' };
-    }
-    return { node: null, selector: '', controlKind: TIMEFRAME_TARGET_CONTROL[normalized] || 'aggregation' };
-  }
-
-  function clickTimeframeButton(node) {
-    node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-    node.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  }
-
-  async function openTimeframeMenu(target) {
-    const found = timeframeButton(target);
-    if (!found.node) {
-      throw new Error(`No visible thinkorswim ${found.controlKind} timeframe button was found.`);
-    }
-    if (found.node.getAttribute('aria-expanded') !== 'true') {
-      clickTimeframeButton(found.node);
-    }
-    for (let attempt = 0; attempt < TIMEFRAME_LOOKUP_RETRIES; attempt += 1) {
-      if (found.node.getAttribute('aria-expanded') === 'true') {
-        return found;
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, TIMEFRAME_LOOKUP_WAIT_MS));
-    }
-    throw new Error('The thinkorswim timeframe menu did not open.');
-  }
-
-  function timeframeOptionCandidates(target) {
-    const normalized = normalizeTimeframeTarget(target);
-    const testIds = TIMEFRAME_TARGET_TESTIDS[normalized] || [];
-    const labelNeedles = {
-      '5m': ['5 minute', '5 min', '5m'],
-      '15m': ['15 minute', '15 min', '15m'],
-      '30m': ['30 minute', '30 min', '30m'],
-      '1h': ['60 minute', '60 min', '1 hour', '1h'],
-      '1d': ['1 day', 'day', '1d'],
-    }[normalized] || [];
-    return { normalized, testIds, labelNeedles };
-  }
-
-  function timeframeOption(target) {
-    const { normalized, testIds, labelNeedles } = timeframeOptionCandidates(target);
-    const prefix = TIMEFRAME_TARGET_CONTROL[normalized] === 'range' ? 'timeframe-range-dropdown' : 'timeframe-aggregation-dropdown';
-    for (const testId of testIds) {
-      const node = document.querySelector(`li[data-testid="${prefix}:${testId}"]`);
-      if (node) {
-        return {
-          node,
-          selector: `li[data-testid="${prefix}:${testId}"]`,
-        };
-      }
-    }
-    const options = Array.from(document.querySelectorAll(TIMEFRAME_OPTION_SELECTORS.join(',')));
-    for (const node of options) {
-      const label = (node.textContent || '').trim().toLowerCase();
-      if (labelNeedles.some((needle) => label.includes(needle))) {
-        return {
-          node,
-          selector: `li[data-testid="${node.getAttribute('data-testid') || ''}"]`,
-        };
-      }
-    }
-    return { node: null, selector: '' };
-  }
-
-  async function switchTimeframe(target) {
-    const menu = await openTimeframeMenu(target);
-    const option = timeframeOption(target);
-    if (!option.node) {
-      throw new Error(`No thinkorswim timeframe option was found for ${target}.`);
-    }
-    option.node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    option.node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-    option.node.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((resolve) => window.setTimeout(resolve, POST_SWITCH_WAIT_MS));
-    return {
-      controlKind: menu.controlKind,
-      buttonSelector: menu.selector,
-      optionSelector: option.selector,
-      target: normalizeTimeframeTarget(target),
-    };
   }
 
   async function resolveSymbolInput() {
@@ -288,7 +149,11 @@
       '.positions .value',
     ]);
 
-    const timeframeResult = textFrom(TIMEFRAME_DISPLAY_SELECTORS);
+    const timeframeResult = textFrom([
+      '[data-testid*="interval"]',
+      '[data-testid*="timeframe"]',
+      '.timeframe',
+    ]);
 
     return {
       symbol: (symbol || symbolResult.text || "").replace(/[^A-Z0-9.\-]/gi, "").toUpperCase(),
@@ -434,9 +299,6 @@
   window.__stocknogsHelperTimer = window.setInterval(tick, POLL_INTERVAL_MS);
   window.stocknogsExtractManualPayload = function stocknogsExtractManualPayload(symbol) {
     return exposeManualPayload(symbol || "", "manual_capture");
-  };
-  window.stocknogsSwitchTimeframe = function stocknogsSwitchTimeframe(target) {
-    return switchTimeframe(target);
   };
   reportDebug("helper_started", { message: "Helper script started and is polling stocknogs." });
   alert("stocknogs helper is now running in this thinkorswim tab. Leave this tab open. When you request a symbol in stocknogs, this page will switch to it and report the DOM data back.");
